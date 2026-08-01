@@ -1,0 +1,12 @@
+> from rest_framework import serializers
+  
+> from apps.accounts.serializers import UserSerializer
+> from .models import Document
+  
+  
+> class DocumentSerializer(serializers.ModelSerializer):
+>     uploaded_by_detail = UserSerializer(source="uploaded_by", read_only=True)
+  
+>     class Meta:
+>         model = Document
+>         exclude = ["id", "deleted_at"]

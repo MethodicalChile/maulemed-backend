@@ -1,0 +1,98 @@
+from apps.common.viewsets import BaseModelViewSet
+from apps.common.permissions import CanViewAudit
+
+from .models import AuditLog
+from .serializers import AuditLogSerializer
+
+from rest_framework.decorators import action
+from apps.common.responses import api_response
+
+class AuditLogViewSet(BaseModelViewSet):
+    queryset = AuditLog.objects.select_related("user").all().order_by("-created_at")
+    serializer_class = AuditLogSerializer
+    permission_classes = [CanViewAudit]
+    enable_audit = False
+
+    filterset_fields = [
+        "user",
+        "action",
+        "entity_app",
+        "entity_model",
+        "entity_uuid",
+    ]
+    search_fields = [
+        "user__username",
+        "entity_app",
+        "entity_model",
+        "entity_uuid",
+        "notes",
+    ]
+    ordering_fields = [
+        "action",
+        "entity_app",
+        "entity_model",
+        "created_at",
+        "updated_at",
+    ]
+    ordering = ["-created_at"]
+
+    def perform_create(self, serializer):
+        # Los logs de auditoría los crea el sistema automáticamente.
+        # No se permite la creación manual desde la API.
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed("POST", detail="Los registros de auditoría se crean automáticamente por el sistema.")
+
+    def update(self, request, *args, **kwargs):
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed("PUT/PATCH", detail="Los registros de auditoría no pueden modificarse.")
+
+    def destroy(self, request, *args, **kwargs):
+        from rest_framework.exceptions import MethodNotAllowed
+        raise MethodNotAllowed("DELETE", detail="Los registros de auditoría no pueden eliminarse.")
+
+    @action(detail=False, methods=["get"], url_path="by-entity")
+    def by_entity(self, request):
+        entity_app = request.GET.get("entity_app")
+        entity_model = request.GET.get("entity_model")
+        entity_uuid = request.GET.get("entity_uuid")
+
+        qs = self.get_queryset()
+
+        if entity_app:
+            qs = qs.filter(entity_app=entity_app)
+
+        if entity_model:
+            qs = qs.filter(entity_model=entity_model)
+
+        if entity_uuid:
+            qs = qs.filter(entity_uuid=entity_uuid)
+
+        qs = qs.order_by("-created_at")
+
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(qs, many=True)
+
+        return api_response(
+            data=serializer.data,
+            message="Historial de entidad obtenido correctamente.",
+        )
+
+    @action(detail=False, methods=["get"], url_path="my-actions")
+    def my_actions(self, request):
+        qs = self.get_queryset().filter(user=request.user).order_by("-created_at")
+
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(qs, many=True)
+
+        return api_response(
+            data=serializer.data,
+            message="Historial de acciones del usuario obtenido correctamente.",
+        )

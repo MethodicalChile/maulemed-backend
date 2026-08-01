@@ -1,0 +1,21 @@
+> from django.urls import include, path
+> from rest_framework.routers import DefaultRouter
+  
+> from .views import (
+>     ProductCategoryViewSet,
+>     UnitOfMeasureViewSet,
+>     ProductViewSet,
+>     BranchProductViewSet,
+> )
+  
+  
+> router = DefaultRouter()
+> router.register("product-categories", ProductCategoryViewSet, basename="product-categories")
+> router.register("units-of-measure", UnitOfMeasureViewSet, basename="units-of-measure")
+> router.register("products", ProductViewSet, basename="products")
+> router.register("branch-products", BranchProductViewSet, basename="branch-products")
+  
+  
+> urlpatterns = [
+>     path("", include(router.urls)),
+> ]

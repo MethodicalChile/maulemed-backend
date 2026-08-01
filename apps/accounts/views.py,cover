@@ -1,0 +1,299 @@
+> import logging
+  
+> from rest_framework.decorators import api_view, permission_classes
+> from rest_framework.permissions import IsAuthenticated
+> from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+> from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+  
+> from apps.common.viewsets import BaseModelViewSet
+> from apps.common.permissions import IsAdminRole
+> from apps.common.responses import api_response
+  
+> from .models import UserProfile, Role, UserRoleAssignment
+> from .serializers import (
+>     UserProfileSerializer,
+>     RoleSerializer,
+>     UserRoleAssignmentSerializer,
+> )
+  
+  
+> logger = logging.getLogger(__name__)
+  
+  
+> class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+>     def validate(self, attrs):
+>         data = super().validate(attrs)
+  
+>         logger.info(f"Login exitoso usuario={self.user.username}")
+  
+>         data["user"] = {
+>             "id": self.user.id,
+>             "username": self.user.username,
+>             "email": self.user.email,
+>             "first_name": self.user.first_name,
+>             "last_name": self.user.last_name,
+>             "is_staff": self.user.is_staff,
+>             "is_superuser": self.user.is_superuser,
+>         }
+  
+>         return data
+  
+  
+> class CustomTokenObtainPairView(TokenObtainPairView):
+>     serializer_class = CustomTokenObtainPairSerializer
+  
+>     def post(self, request, *args, **kwargs):
+>         response = super().post(request, *args, **kwargs)
+  
+>         return api_response(
+>             data=response.data,
+>             status_code=response.status_code,
+>             message="Login realizado correctamente.",
+>         )
+          
+> class CustomTokenRefreshView(TokenRefreshView):
+>     def post(self, request, *args, **kwargs):
+>         response = super().post(request, *args, **kwargs)
+  
+>         return api_response(
+>             data=response.data,
+>             status_code=response.status_code,
+>             message="Token renovado correctamente.",
+>         )
+  
+> class RoleViewSet(BaseModelViewSet):
+>     queryset = Role.objects.all().order_by("name")
+>     serializer_class = RoleSerializer
+>     permission_classes = [IsAdminRole]
+  
+  
+> class UserProfileViewSet(BaseModelViewSet):
+>     queryset = UserProfile.objects.select_related("user", "organization").order_by("id").all()
+>     serializer_class = UserProfileSerializer
+>     permission_classes = [IsAdminRole]
+  
+  
+> class UserRoleAssignmentViewSet(BaseModelViewSet):
+>     queryset = UserRoleAssignment.objects.select_related(
+>         "user",
+>         "role",
+>         "organization",
+>         "legal_entity",
+>         "branch",
+>     ).order_by("id").all()
+>     serializer_class = UserRoleAssignmentSerializer
+>     permission_classes = [IsAdminRole]
+  
+  
+> @api_view(["GET"])
+> @permission_classes([IsAuthenticated])
+> def me(request):
+>     user = request.user
+  
+>     assignments = (
+>         user.role_assignments.filter(is_active=True)
+>         .select_related("role", "organization", "legal_entity", "branch")
+>     )
+  
+>     roles = []
+>     organizations = []
+>     legal_entities = []
+>     branches = []
+  
+>     for assignment in assignments:
+>         if assignment.role:
+>             roles.append(
+>                 {
+>                     "uuid": str(assignment.role.uuid),
+>                     "code": assignment.role.code,
+>                     "name": assignment.role.name,
+>                 }
+>             )
+  
+>         if getattr(assignment, "organization", None):
+>             organizations.append(
+>                 {
+>                     "uuid": str(assignment.organization.uuid),
+>                     "name": assignment.organization.name,
+>                 }
+>             )
+  
+>         if getattr(assignment, "legal_entity", None):
+>             legal_entities.append(
+>                 {
+>                     "uuid": str(assignment.legal_entity.uuid),
+>                     "name": assignment.legal_entity.name,
+>                     "rut": assignment.legal_entity.rut,
+>                 }
+>             )
+  
+>         if getattr(assignment, "branch", None):
+>             branches.append(
+>                 {
+>                     "uuid": str(assignment.branch.uuid),
+>                     "name": assignment.branch.name,
+>                     "code": assignment.branch.code,
+>                 }
+>             )
+  
+>     role_codes = list({role["code"] for role in roles})
+  
+>     is_admin = user.is_superuser or "ADMIN" in role_codes
+>     is_gerente = "GERENTE" in role_codes
+  
+>     permissions = {
+>         "can_view_dashboard": True,
+>         "can_manage_catalogs": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
+>         "can_manage_suppliers": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
+>         "can_view_inventory": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "BODEGUERO",
+>                 "JEFA_SUCURSAL",
+>                 "SECRETARIA",
+>                 "TENS",
+>                 "TECNOLOGA_MEDICA",
+>                 "DOCTOR",
+>             }
+>         ),
+>         "can_manage_inventory": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "BODEGUERO",
+>                 "JEFA_SUCURSAL",
+>                 "TENS",
+>                 "TECNOLOGA_MEDICA",
+>             }
+>         ),
+>         "can_create_supply_request": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "JEFA_SUCURSAL",
+>                 "SECRETARIA",
+>                 "TENS",
+>                 "TECNOLOGA_MEDICA",
+>                 "DOCTOR",
+>             }
+>         ),
+>         "can_approve_supply_request": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
+>         "can_manage_purchase_orders": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
+>         "can_receive_purchase": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "BODEGUERO",
+>                 "JEFA_SUCURSAL",
+>                 "TENS",
+>                 "TECNOLOGA_MEDICA",
+>             }
+>         ),
+>         "can_manage_transfers": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "BODEGUERO",
+>                 "JEFA_SUCURSAL",
+>                 "TENS",
+>                 "TECNOLOGA_MEDICA",
+>             }
+>         ),
+>         "can_manage_finance": is_admin or is_gerente or "FINANZAS" in role_codes,
+>         "can_view_audit": is_admin or is_gerente,
+>         "can_view_reports": is_admin or is_gerente or bool(
+>             set(role_codes)
+>             & {
+>                 "ABASTECIMIENTO",
+>                 "FINANZAS",
+>                 "BODEGUERO",
+>                 "JEFA_SUCURSAL",
+>             }
+>         ),
+>     }
+  
+>     menu = [
+>         {
+>             "key": "dashboard",
+>             "label": "Dashboard",
+>             "path": "/dashboard",
+>             "visible": permissions["can_view_dashboard"],
+>         },
+>         {
+>             "key": "products",
+>             "label": "Productos",
+>             "path": "/products",
+>             "visible": permissions["can_manage_catalogs"],
+>         },
+>         {
+>             "key": "suppliers",
+>             "label": "Proveedores",
+>             "path": "/suppliers",
+>             "visible": permissions["can_manage_suppliers"],
+>         },
+>         {
+>             "key": "inventory",
+>             "label": "Inventario",
+>             "path": "/inventory",
+>             "visible": permissions["can_view_inventory"],
+>         },
+>         {
+>             "key": "purchasing",
+>             "label": "Compras",
+>             "path": "/purchasing",
+>             "visible": permissions["can_create_supply_request"]
+>             or permissions["can_manage_purchase_orders"],
+>         },
+>         {
+>             "key": "transfers",
+>             "label": "Traspasos",
+>             "path": "/transfers",
+>             "visible": permissions["can_manage_transfers"],
+>         },
+>         {
+>             "key": "finance",
+>             "label": "Finanzas",
+>             "path": "/finance",
+>             "visible": permissions["can_manage_finance"],
+>         },
+>         {
+>             "key": "reports",
+>             "label": "Reportes",
+>             "path": "/reports",
+>             "visible": permissions["can_view_reports"],
+>         },
+>         {
+>             "key": "audit",
+>             "label": "Auditoría",
+>             "path": "/audit",
+>             "visible": permissions["can_view_audit"],
+>         },
+>     ]
+  
+>     data = {
+>         "user": {
+>             "id": user.id,
+>             "uuid": str(user.profile.uuid) if hasattr(user, "profile") else None,
+>             "username": user.username,
+>             "email": user.email,
+>             "first_name": user.first_name,
+>             "last_name": user.last_name,
+>             "is_staff": user.is_staff,
+>             "is_superuser": user.is_superuser,
+>         },
+>         "roles": roles,
+>         "role_codes": role_codes,
+>         "scopes": {
+>             "organizations": organizations,
+>             "legal_entities": legal_entities,
+>             "branches": branches,
+>         },
+>         "permissions": permissions,
+>         "menu": [item for item in menu if item["visible"]],
+>     }
+  
+>     return api_response(
+>         data=data,
+>         message="Usuario autenticado obtenido correctamente.",
+>     )

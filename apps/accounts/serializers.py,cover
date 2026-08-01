@@ -1,0 +1,84 @@
+> from django.contrib.auth import get_user_model
+> from rest_framework import serializers
+  
+> from .models import UserProfile, Role, UserRoleAssignment
+  
+  
+> User = get_user_model()
+  
+  
+> class UserSerializer(serializers.ModelSerializer):
+>     full_name = serializers.SerializerMethodField()
+  
+>     class Meta:
+>         model = User
+>         fields = [
+>             "id",
+>             "username",
+>             "email",
+>             "first_name",
+>             "last_name",
+>             "full_name",
+>             "is_active",
+>             "is_staff",
+>             "is_superuser",
+>         ]
+>         read_only_fields = ["id", "is_staff", "is_superuser"]
+  
+>     def get_full_name(self, obj):
+>         return obj.get_full_name()
+  
+  
+> class RoleSerializer(serializers.ModelSerializer):
+>     class Meta:
+>         model = Role
+>         exclude = ["id", "deleted_at"]
+  
+  
+> class UserProfileSerializer(serializers.ModelSerializer):
+>     user_detail = UserSerializer(source="user", read_only=True)
+  
+>     class Meta:
+>         model = UserProfile
+>         exclude = ["id", "deleted_at"]
+  
+  
+> class UserRoleAssignmentSerializer(serializers.ModelSerializer):
+>     role_detail = RoleSerializer(source="role", read_only=True)
+>     user_detail = UserSerializer(source="user", read_only=True)
+  
+>     class Meta:
+>         model = UserRoleAssignment
+>         exclude = ["id", "deleted_at"]
+  
+>     def validate(self, attrs):
+>         user = attrs.get("user") or (self.instance and self.instance.user)
+>         role = attrs.get("role") or (self.instance and self.instance.role)
+>         organization = attrs.get("organization") or (self.instance and self.instance.organization)
+>         legal_entity = attrs.get("legal_entity") or (self.instance and self.instance.legal_entity)
+>         branch = attrs.get("branch") or (self.instance and self.instance.branch)
+  
+>         qs = UserRoleAssignment.objects.filter(
+>             user=user,
+>             role=role,
+>             organization=organization,
+>             legal_entity=legal_entity,
+>             branch=branch,
+>         )
+  
+>         if self.instance:
+>             qs = qs.exclude(pk=self.instance.pk)
+  
+>         if qs.exists():
+>             raise serializers.ValidationError(
+>                 "Ya existe una asignación de rol para este usuario con el mismo alcance."
+>             )
+  
+>         return attrs
+  
+  
+> class MeSerializer(serializers.Serializer):
+>     user = UserSerializer()
+>     profile = UserProfileSerializer(allow_null=True)
+>     roles = serializers.ListField()
+>     scopes = serializers.ListField()

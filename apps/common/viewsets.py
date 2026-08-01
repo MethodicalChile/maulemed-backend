@@ -1,0 +1,164 @@
+import logging
+
+from rest_framework import status
+from rest_framework.viewsets import ModelViewSet
+
+from apps.common.responses import api_response
+from apps.audit.services import (
+    serialize_instance,
+    audit_create,
+    audit_update,
+    audit_delete,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+class BaseModelViewSet(ModelViewSet):
+    """
+    ViewSet base para modelos propios.
+
+    - Usa uuid en URL.
+    - No elimina físicamente.
+    - Estandariza respuestas.
+    - Respeta paginación estándar.
+    - Registra logs por consola.
+    - Registra auditoría automática para CREATE, UPDATE y DELETE.
+    - Garantiza que los registros con soft-delete (deleted_at__isnull=False)
+      nunca sean expuestos, incluso si el queryset de la subclase no filtra.
+    """
+
+    lookup_field = "uuid"
+    lookup_url_kwarg = "uuid"
+
+    success_list_message = "Listado obtenido correctamente."
+    success_retrieve_message = "Registro obtenido correctamente."
+    success_create_message = "Registro creado correctamente."
+    success_update_message = "Registro actualizado correctamente."
+    success_delete_message = "Registro eliminado correctamente."
+
+    enable_audit = True
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Guarda de soft delete: si el modelo tiene deleted_at, filtrar siempre.
+        # Esto cubre el caso en que una subclase use all_objects o no pase por
+        # ActiveManager, evitando que registros eliminados sean accesibles.
+        if hasattr(qs.model, "deleted_at"):
+            qs = qs.filter(deleted_at__isnull=True)
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        logger.info(f"Listando registros en {self.__class__.__name__}")
+
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return api_response(
+            data=serializer.data,
+            status_code=status.HTTP_200_OK,
+            message=self.success_list_message,
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        logger.info(f"Obteniendo registro en {self.__class__.__name__}")
+
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+
+        return api_response(
+            data=serializer.data,
+            status_code=status.HTTP_200_OK,
+            message=self.success_retrieve_message,
+        )
+
+    def create(self, request, *args, **kwargs):
+        logger.info(f"Creando registro en {self.__class__.__name__}")
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+
+        instance = serializer.instance
+
+        if self.enable_audit:
+            audit_create(
+                request=request,
+                instance=instance,
+                notes=f"Creación desde {self.__class__.__name__}",
+            )
+
+        return api_response(
+            data=serializer.data,
+            status_code=status.HTTP_201_CREATED,
+            message=self.success_create_message,
+        )
+
+    def update(self, request, *args, **kwargs):
+        logger.info(f"Actualizando registro en {self.__class__.__name__}")
+
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+
+        old_data = serialize_instance(instance)
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        if self.enable_audit:
+            audit_update(
+                request=request,
+                instance=serializer.instance,
+                old_data=old_data,
+                notes=f"Actualización desde {self.__class__.__name__}",
+            )
+
+        return api_response(
+            data=serializer.data,
+            status_code=status.HTTP_200_OK,
+            message=self.success_update_message,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        logger.info(f"Actualizando parcialmente registro en {self.__class__.__name__}")
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        logger.info(
+            f"Eliminando lógicamente registro en {self.__class__.__name__} uuid={getattr(instance, 'uuid', None)}"
+        )
+
+        old_data = serialize_instance(instance)
+
+        self.perform_destroy(instance)
+
+        if self.enable_audit:
+            audit_delete(
+                request=request,
+                instance=instance,
+                old_data=old_data,
+                notes=f"Eliminación lógica desde {self.__class__.__name__}",
+            )
+
+        return api_response(
+            data=None,
+            status_code=status.HTTP_204_NO_CONTENT,
+            message=self.success_delete_message,
+        )
+
+    def perform_destroy(self, instance):
+        if hasattr(instance, "soft_delete"):
+            instance.soft_delete()
+        else:
+            instance.delete()

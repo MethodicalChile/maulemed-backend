@@ -1,0 +1,49 @@
+> from rest_framework import serializers
+  
+> from apps.products.serializers import ProductSmallSerializer
+> from .models import Supplier, SupplierProduct, SupplierProductPrice
+  
+  
+> class SupplierSmallSerializer(serializers.ModelSerializer):
+>     class Meta:
+>         model = Supplier
+>         fields = ["uuid", "name", "rut", "email", "phone"]
+  
+  
+> class SupplierSerializer(serializers.ModelSerializer):
+>     class Meta:
+>         model = Supplier
+>         exclude = ["id", "deleted_at"]
+  
+  
+> class SupplierProductSerializer(serializers.ModelSerializer):
+>     supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
+>     product_detail = ProductSmallSerializer(source="product", read_only=True)
+  
+>     class Meta:
+>         model = SupplierProduct
+>         exclude = ["id", "deleted_at"]
+  
+  
+> class SupplierProductSmallSerializer(serializers.ModelSerializer):
+>     supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
+>     product_detail = ProductSmallSerializer(source="product", read_only=True)
+  
+>     class Meta:
+>         model = SupplierProduct
+>         fields = [
+>             "uuid",
+>             "supplier_detail",
+>             "product_detail",
+>             "supplier_sku",
+>             "last_price",
+>             "currency",
+>         ]
+  
+  
+> class SupplierProductPriceSerializer(serializers.ModelSerializer):
+>     supplier_product_detail = SupplierProductSmallSerializer(source="supplier_product", read_only=True)
+  
+>     class Meta:
+>         model = SupplierProductPrice
+>         exclude = ["id", "deleted_at"]

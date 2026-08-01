@@ -1,0 +1,165 @@
+from django.db import models
+from django.conf import settings
+from apps.common.models import BaseModel
+from apps.products.models import Product
+
+
+class Supplier(BaseModel):
+    name = models.CharField(max_length=180)
+    rut = models.CharField(max_length=20, unique=True, blank=True, null=True)
+    contact_name = models.CharField(max_length=150, blank=True, null=True)
+    email = models.EmailField(max_length=180, blank=True, null=True)
+    phone = models.CharField(max_length=50, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    payment_terms = models.CharField(max_length=100, blank=True, null=True)
+    delivery_days = models.IntegerField(blank=True, null=True)
+
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "suppliers"
+
+    def __str__(self):
+        return self.name
+
+
+class SupplierProduct(BaseModel):
+    supplier = models.ForeignKey(
+        Supplier,
+        on_delete=models.CASCADE,
+        related_name="supplier_products",
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="supplier_products",
+    )
+
+    supplier_sku = models.CharField(max_length=100, blank=True, null=True)
+    last_price = models.DecimalField(max_digits=14, decimal_places=2, blank=True, null=True)
+    currency = models.CharField(max_length=10, default="CLP")
+    price_valid_from = models.DateField(blank=True, null=True)
+    price_valid_to = models.DateField(blank=True, null=True)
+
+    min_purchase_quantity = models.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        blank=True,
+        null=True,
+    )
+    requires_purchase_order = models.BooleanField(default=False)
+    allows_credit = models.BooleanField(default=True)
+    allows_cash_purchase = models.BooleanField(default=True)
+
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "supplier_products"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["supplier", "product"],
+                name="uq_supplier_product",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.supplier} - {self.product}"
+
+
+class SupplierProductPrice(BaseModel):
+    supplier_product = models.ForeignKey(
+        SupplierProduct,
+        on_delete=models.CASCADE,
+        related_name="prices",
+    )
+    price = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=10, default="CLP")
+    valid_from = models.DateField()
+    valid_to = models.DateField(blank=True, null=True)
+    source = models.CharField(max_length=100, blank=True, null=True)
+
+    class Meta:
+        db_table = "supplier_product_prices"
+
+    def __str__(self):
+        return f"{self.supplier_product} - {self.price}"
+
+
+class SupplierProductPriceHistory(BaseModel):
+    supplier_product = models.ForeignKey(
+        "SupplierProduct",
+        on_delete=models.PROTECT,
+        related_name="price_history",
+    )
+
+    price = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+    )
+
+    currency = models.CharField(
+        max_length=10,
+        default="CLP",
+    )
+
+    effective_date = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    valid_until = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    previous_price = models.DecimalField(
+        max_digits=18,
+        decimal_places=4,
+        null=True,
+        blank=True,
+    )
+
+    change_reason = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    source = models.CharField(
+        max_length=30,
+        choices=[
+            ("MANUAL", "Actualización manual"),
+            ("PURCHASE", "Orden de compra"),
+            ("IMPORT", "Importación"),
+            ("INITIAL", "Precio inicial"),
+        ],
+        default="MANUAL",
+    )
+
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="supplier_price_changes",
+    )
+
+    class Meta:
+        db_table = "supplier_product_price_history"
+        ordering = [
+            "-effective_date",
+            "-created_at",
+        ]
+        indexes = [
+            models.Index(
+                fields=[
+                    "supplier_product",
+                    "effective_date",
+                ],
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.supplier_product} - "
+            f"{self.price} {self.currency}"
+        )

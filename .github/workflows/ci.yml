@@ -1,0 +1,60 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Django tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      # ── 2. Python ────────────────────────────────────────────────────────────
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # ── 3. Dependencias ──────────────────────────────────────────────────────
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      # ── 4. Variables de entorno mínimas para el settings de tests ───────────
+      # Valores ficticios — settings_test.py sobreescribe la DB con SQLite.
+      # Las claves de servicios externos (Supabase, Google) no se usan en tests.
+      - name: Crear .env para CI
+        run: |
+          cat > .env << 'EOF'
+          SECRET_KEY=ci-secret-key-not-used-in-production
+          DEBUG=False
+          DB_NAME=unused
+          DB_USER=unused
+          DB_PASSWORD=unused
+          DB_HOST=localhost
+          DB_PORT=5432
+          ALLOWED_HOSTS=localhost,127.0.0.1
+          CORS_ALLOWED_ORIGINS=http://localhost:5173
+          SUPABASE_URL=https://placeholder.supabase.co
+          SUPABASE_SECRET_KEY=placeholder
+          SUPABASE_STORAGE_BUCKET=placeholder
+          GOOGLE_CLIENT_ID=placeholder.apps.googleusercontent.com
+          EOF
+
+      # ── 5. Migraciones con SQLite ─────────────────────────────────────────
+      - name: Aplicar migraciones (SQLite en memoria)
+        run: python manage.py migrate --settings=config.settings_test
+
+      # ── 6. Tests ─────────────────────────────────────────────────────────────
+      - name: Ejecutar tests
+        run: >
+          python manage.py test
+          --settings=config.settings_test
+          --verbosity=2

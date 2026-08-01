@@ -1,0 +1,69 @@
+> from django.conf import settings
+> from django.db import models
+  
+> from apps.common.models import BaseModel
+  
+  
+> class AuditLog(BaseModel):
+>     ACTION_CREATE = "CREATE"
+>     ACTION_UPDATE = "UPDATE"
+>     ACTION_DELETE = "DELETE"
+>     ACTION_RESTORE = "RESTORE"
+>     ACTION_LOGIN = "LOGIN"
+>     ACTION_LOGOUT = "LOGOUT"
+>     ACTION_APPROVE = "APPROVE"
+>     ACTION_REJECT = "REJECT"
+>     ACTION_EXPORT = "EXPORT"
+>     ACTION_IMPORT = "IMPORT"
+  
+>     ACTION_CHOICES = [
+>         (ACTION_CREATE, "Crear"),
+>         (ACTION_UPDATE, "Actualizar"),
+>         (ACTION_DELETE, "Eliminar"),
+>         (ACTION_RESTORE, "Restaurar"),
+>         (ACTION_LOGIN, "Login"),
+>         (ACTION_LOGOUT, "Logout"),
+>         (ACTION_APPROVE, "Aprobar"),
+>         (ACTION_REJECT, "Rechazar"),
+>         (ACTION_EXPORT, "Exportar"),
+>         (ACTION_IMPORT, "Importar"),
+>     ]
+  
+>     user = models.ForeignKey(
+>         settings.AUTH_USER_MODEL,
+>         on_delete=models.SET_NULL,
+>         related_name="audit_logs",
+>         blank=True,
+>         null=True,
+>     )
+  
+>     action = models.CharField(
+>         max_length=80,
+>         choices=ACTION_CHOICES,
+>     )
+  
+>     entity_app = models.CharField(max_length=80, blank=True, null=True)
+>     entity_model = models.CharField(max_length=80)
+>     entity_uuid = models.UUIDField(blank=True, null=True)
+  
+>     old_data = models.JSONField(blank=True, null=True)
+>     new_data = models.JSONField(blank=True, null=True)
+  
+>     ip_address = models.GenericIPAddressField(blank=True, null=True)
+>     user_agent = models.TextField(blank=True, null=True)
+  
+>     notes = models.TextField(blank=True, null=True)
+  
+>     class Meta:
+>         db_table = "audit_logs"
+>         verbose_name = "Audit Log"
+>         verbose_name_plural = "Audit Logs"
+>         indexes = [
+>             models.Index(fields=["user"], name="idx_audit_user"),
+>             models.Index(fields=["action"], name="idx_audit_action"),
+>             models.Index(fields=["entity_model", "entity_uuid"], name="idx_audit_entity"),
+>             models.Index(fields=["created_at"], name="idx_audit_created_at"),
+>         ]
+  
+>     def __str__(self):
+>         return f"{self.action} - {self.entity_model} - {self.entity_uuid}"

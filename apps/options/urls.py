@@ -1,0 +1,28 @@
+from django.urls import path
+
+from .views import (
+    organization_options,
+    legal_entity_options,
+    branch_options,
+    cost_center_options,
+    product_category_options,
+    unit_options,
+    product_options,
+    supplier_options,
+    warehouse_options,
+    role_options,
+)
+
+
+urlpatterns = [
+    path("options/organizations/", organization_options, name="options-organizations"),
+    path("options/legal-entities/", legal_entity_options, name="options-legal-entities"),
+    path("options/branches/", branch_options, name="options-branches"),
+    path("options/cost-centers/", cost_center_options, name="options-cost-centers"),
+    path("options/product-categories/", product_category_options, name="options-product-categories"),
+    path("options/units/", unit_options, name="options-units"),
+    path("options/products/", product_options, name="options-products"),
+    path("options/suppliers/", supplier_options, name="options-suppliers"),
+    path("options/warehouses/", warehouse_options, name="options-warehouses"),
+    path("options/roles/", role_options, name="options-roles"),
+]

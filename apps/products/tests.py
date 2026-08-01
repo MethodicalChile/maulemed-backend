@@ -1,0 +1,330 @@
+"""
+Tests para la app products:
+- ProductCategory, UnitOfMeasure, Product, BranchProduct
+- Permisos: CanManageCatalogs (lectura amplia, escritura restringida)
+- Validaciones de modelos
+"""
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APIClient
+
+from apps.accounts.models import Role, UserRoleAssignment, UserProfile
+from apps.organizations.models import Organization, Branch, LegalEntity
+from apps.products.models import ProductCategory, UnitOfMeasure, Product, BranchProduct
+
+User = get_user_model()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def make_superuser(username="prodadmin", password="prodpass"):
+    u = User.objects.create_user(username=username, password=password, is_superuser=True, is_staff=True)
+    UserProfile.objects.get_or_create(user=u, defaults={})
+    return u
+
+
+def make_user_role(username, password, role_code):
+    user = User.objects.create_user(username=username, password=password)
+    role, _ = Role.objects.get_or_create(code=role_code, defaults={"name": role_code, "is_active": True})
+    UserRoleAssignment.objects.create(user=user, role=role, is_active=True)
+    UserProfile.objects.get_or_create(user=user, defaults={})
+    return user
+
+
+def make_category(name="Cat Prod"):
+    cat, _ = ProductCategory.objects.get_or_create(name=name)
+    return cat
+
+
+def make_unit(code="UNP", name="Unidad Prod"):
+    unit, _ = UnitOfMeasure.objects.get_or_create(code=code, defaults={"name": name})
+    return unit
+
+
+def make_product(name="Producto API", category=None, unit=None):
+    if category is None:
+        category = make_category()
+    if unit is None:
+        unit = make_unit()
+    return Product.objects.create(name=name, category=category, unit=unit, is_active=True)
+
+
+class BaseProductTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = make_superuser()
+        self.category = make_category("Categoría Base")
+        self.unit = make_unit("UNB", "Unidad Base")
+
+    def _auth(self, username="prodadmin", password="prodpass"):
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": username, "password": password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def _auth_admin(self):
+        self._auth()
+
+
+# ---------------------------------------------------------------------------
+# Tests de ProductCategory
+# ---------------------------------------------------------------------------
+
+class ProductCategoryTests(BaseProductTest):
+
+    def test_crear_categoria(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/product-categories/",
+            {"name": "Medicamentos", "is_active": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["data"]["name"], "Medicamentos")
+
+    def test_nombre_unico_categoria(self):
+        self._auth_admin()
+        ProductCategory.objects.create(name="Cat Única")
+        response = self.client.post(
+            "/api/product-categories/",
+            {"name": "Cat Única", "is_active": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_listar_categorias(self):
+        self._auth_admin()
+        response = self.client.get("/api/product-categories/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_actualizar_categoria(self):
+        self._auth_admin()
+        cat = ProductCategory.objects.create(name="Cat Original")
+        response = self.client.patch(
+            f"/api/product-categories/{cat.uuid}/",
+            {"name": "Cat Actualizada"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["name"], "Cat Actualizada")
+
+    def test_soft_delete_categoria(self):
+        self._auth_admin()
+        cat = ProductCategory.objects.create(name="Cat Borrar")
+        response = self.client.delete(f"/api/product-categories/{cat.uuid}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cat.refresh_from_db()
+        self.assertIsNotNone(cat.deleted_at)
+
+    def test_str_categoria(self):
+        cat = ProductCategory(name="Insumos")
+        self.assertEqual(str(cat), "Insumos")
+
+    def test_doctor_puede_leer_categorias(self):
+        """DOCTOR está en read_roles de CanManageCatalogs."""
+        doctor = make_user_role("doc_cat", "pass123", "DOCTOR")
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": "doc_cat", "password": "pass123"},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+        response = self.client.get("/api/product-categories/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_doctor_no_puede_crear_categorias(self):
+        """DOCTOR no está en write_roles de CanManageCatalogs."""
+        doctor = make_user_role("doc_cat2", "pass123", "DOCTOR")
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": "doc_cat2", "password": "pass123"},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+        response = self.client.post(
+            "/api/product-categories/",
+            {"name": "Prohibida", "is_active": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+# ---------------------------------------------------------------------------
+# Tests de UnitOfMeasure
+# ---------------------------------------------------------------------------
+
+class UnitOfMeasureTests(BaseProductTest):
+
+    def test_crear_unidad(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/units-of-measure/",
+            {"code": "KG", "name": "Kilogramo"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_codigo_unico_unidad(self):
+        self._auth_admin()
+        UnitOfMeasure.objects.create(code="UNX", name="UnidadX")
+        response = self.client.post(
+            "/api/units-of-measure/",
+            {"code": "UNX", "name": "Duplicada"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_str_unidad(self):
+        unit = UnitOfMeasure(code="ML", name="Mililitro")
+        self.assertEqual(str(unit), "ML")
+
+    def test_listar_unidades(self):
+        self._auth_admin()
+        response = self.client.get("/api/units-of-measure/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Tests de Product
+# ---------------------------------------------------------------------------
+
+class ProductTests(BaseProductTest):
+
+    def test_crear_producto(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/products/",
+            {
+                "name": "Paracetamol 500mg",
+                "category": str(self.category.uuid),
+                "unit": str(self.unit.uuid),
+                "is_active": True,
+                "is_medication": True,
+                "requires_lot": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()["data"]
+        self.assertTrue(data["is_medication"])
+        self.assertTrue(data["requires_lot"])
+
+    def test_listar_productos(self):
+        self._auth_admin()
+        response = self.client.get("/api/products/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_filtrar_productos_por_categoria(self):
+        self._auth_admin()
+        product = make_product("Prod Filtro", category=self.category, unit=self.unit)
+        response = self.client.get(f"/api/products/?category={self.category.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_buscar_producto_por_nombre(self):
+        self._auth_admin()
+        make_product("Producto Buscable", category=self.category, unit=self.unit)
+        response = self.client.get("/api/products/?search=Buscable")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        names = [p["name"] for p in results]
+        self.assertIn("Producto Buscable", names)
+
+    def test_soft_delete_producto(self):
+        self._auth_admin()
+        product = make_product("Prod A Borrar", category=self.category, unit=self.unit)
+        response = self.client.delete(f"/api/products/{product.uuid}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product.refresh_from_db()
+        self.assertIsNotNone(product.deleted_at)
+
+    def test_str_producto(self):
+        product = Product(name="Test Product")
+        self.assertEqual(str(product), "Test Product")
+
+    def test_codigo_interno_unico(self):
+        self._auth_admin()
+        make_product(name="Prod Código", category=self.category, unit=self.unit)
+        # Asignar internal_code manualmente
+        p = Product.objects.get(name="Prod Código")
+        p.internal_code = "IC-UNIQUE-001"
+        p.save()
+        response = self.client.post(
+            "/api/products/",
+            {
+                "name": "Otro Prod",
+                "category": str(self.category.uuid),
+                "unit": str(self.unit.uuid),
+                "internal_code": "IC-UNIQUE-001",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# ---------------------------------------------------------------------------
+# Tests de BranchProduct
+# ---------------------------------------------------------------------------
+
+class BranchProductTests(BaseProductTest):
+
+    def setUp(self):
+        super().setUp()
+        org = Organization.objects.create(name="BPOrg", is_active=True)
+        le = LegalEntity.objects.create(organization=org, name="BPLE", rut="76888001-1", is_active=True)
+        self.branch = Branch.objects.create(organization=org, legal_entity=le, name="BPBranch", code="BPB01", is_active=True)
+        self.product = make_product("BP Product", category=self.category, unit=self.unit)
+
+    def test_crear_branch_product(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/branch-products/",
+            {
+                "branch": self.branch.id,
+                "product": self.product.id,
+                "min_stock": "5.000",
+                "critical_stock": "2.000",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_unique_branch_product(self):
+        self._auth_admin()
+        BranchProduct.objects.create(
+            branch=self.branch,
+            product=self.product,
+            min_stock=Decimal("5"),
+            critical_stock=Decimal("2"),
+            is_active=True,
+        )
+        response = self.client.post(
+            "/api/branch-products/",
+            {
+                "branch": self.branch.id,
+                "product": self.product.id,
+                "min_stock": "3.000",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_listar_branch_products(self):
+        self._auth_admin()
+        response = self.client.get("/api/branch-products/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_str_branch_product(self):
+        bp = BranchProduct(branch=self.branch, product=self.product)
+        self.assertIn("BPBranch", str(bp))
+        self.assertIn("BP Product", str(bp))

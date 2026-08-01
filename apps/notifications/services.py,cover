@@ -1,0 +1,393 @@
+> import logging
+  
+> from django.contrib.auth import get_user_model
+  
+> from apps.accounts.models import UserRoleAssignment
+> from apps.notifications.models import Notification
+  
+  
+> logger = logging.getLogger(__name__)
+  
+> User = get_user_model()
+  
+  
+> def _get_notification_type(default_type="INFO"):
+>     """
+>     Devuelve un tipo de notificación válido según las constantes del modelo.
+>     Si el modelo no tiene constantes, usa el string recibido.
+>     """
+>     for attr in [
+>         "TYPE_INFO",
+>         "NOTIFICATION_TYPE_INFO",
+>         "INFO",
+>     ]:
+>         if hasattr(Notification, attr):
+>             return getattr(Notification, attr)
+  
+!     return default_type
+  
+  
+> def create_notification(
+>     *,
+>     user,
+>     title,
+>     message,
+>     notification_type=None,
+>     related_app=None,
+>     related_model=None,
+>     related_uuid=None,
+> ):
+>     if not user:
+>         return None
+  
+>     notification_type = notification_type or _get_notification_type()
+  
+>     notification = Notification.objects.create(
+>         user=user,
+>         title=title,
+>         message=message,
+>         notification_type=notification_type,
+>         related_app=related_app,
+>         related_model=related_model,
+>         related_uuid=related_uuid,
+>     )
+  
+>     logger.info(
+>         f"Notificación creada user={user.username} title={title} related={related_app}.{related_model} uuid={related_uuid}"
+>     )
+  
+>     return notification
+  
+  
+> def create_notifications_for_users(
+>     *,
+>     users,
+>     title,
+>     message,
+>     notification_type=None,
+>     related_app=None,
+>     related_model=None,
+>     related_uuid=None,
+> ):
+>     notifications = []
+  
+>     unique_users = []
+>     seen = set()
+  
+>     for user in users:
+>         if not user:
+>             continue
+  
+>         if user.id in seen:
+>             continue
+  
+>         seen.add(user.id)
+>         unique_users.append(user)
+  
+>     for user in unique_users:
+>         notification = create_notification(
+>             user=user,
+>             title=title,
+>             message=message,
+>             notification_type=notification_type,
+>             related_app=related_app,
+>             related_model=related_model,
+>             related_uuid=related_uuid,
+>         )
+  
+>         if notification:
+>             notifications.append(notification)
+  
+>     return notifications
+  
+  
+> def get_users_by_roles(
+>     *,
+>     role_codes,
+>     organization=None,
+>     legal_entity=None,
+>     branch=None,
+> ):
+>     """
+>     Busca usuarios activos por rol y opcionalmente por alcance:
+>     - organization
+>     - legal_entity
+>     - branch
+>     """
+  
+>     qs = UserRoleAssignment.objects.filter(
+>         is_active=True,
+>         user__is_active=True,
+>         role__code__in=role_codes,
+>     ).select_related(
+>         "user",
+>         "role",
+>         "organization",
+>         "legal_entity",
+>         "branch",
+>     )
+  
+>     if branch:
+>         qs = qs.filter(branch=branch)
+  
+>     elif legal_entity:
+>         qs = qs.filter(legal_entity=legal_entity)
+  
+!     elif organization:
+!         qs = qs.filter(organization=organization)
+  
+>     users = [assignment.user for assignment in qs]
+  
+>     return users
+  
+  
+> def notify_roles(
+>     *,
+>     role_codes,
+>     title,
+>     message,
+>     organization=None,
+>     legal_entity=None,
+>     branch=None,
+>     notification_type=None,
+>     related_app=None,
+>     related_model=None,
+>     related_uuid=None,
+> ):
+>     users = get_users_by_roles(
+>         role_codes=role_codes,
+>         organization=organization,
+>         legal_entity=legal_entity,
+>         branch=branch,
+>     )
+  
+>     return create_notifications_for_users(
+>         users=users,
+>         title=title,
+>         message=message,
+>         notification_type=notification_type,
+>         related_app=related_app,
+>         related_model=related_model,
+>         related_uuid=related_uuid,
+>     )
+  
+  
+> def notify_user(
+>     *,
+>     user,
+>     title,
+>     message,
+>     notification_type=None,
+>     related_app=None,
+>     related_model=None,
+>     related_uuid=None,
+> ):
+>     return create_notification(
+>         user=user,
+>         title=title,
+>         message=message,
+>         notification_type=notification_type,
+>         related_app=related_app,
+>         related_model=related_model,
+>         related_uuid=related_uuid,
+>     )
+  
+  
+> def notify_supply_request_submitted(supply_request):
+>     return notify_roles(
+>         role_codes=["ADMIN", "GERENTE", "ABASTECIMIENTO"],
+>         branch=supply_request.branch,
+>         title="Nueva solicitud de insumos",
+>         message=f"Se envió una solicitud de insumos desde {supply_request.branch}.",
+>         related_app="purchasing",
+>         related_model="SupplyRequest",
+>         related_uuid=supply_request.uuid,
+>     )
+  
+  
+> def notify_supply_request_approved(supply_request):
+>     return notify_user(
+>         user=supply_request.requested_by,
+>         title="Solicitud aprobada",
+>         message="Tu solicitud de insumos fue aprobada.",
+>         related_app="purchasing",
+>         related_model="SupplyRequest",
+>         related_uuid=supply_request.uuid,
+>     )
+  
+  
+> def notify_supply_request_rejected(supply_request):
+>     return notify_user(
+>         user=supply_request.requested_by,
+>         title="Solicitud rechazada",
+>         message="Tu solicitud de insumos fue rechazada.",
+>         related_app="purchasing",
+>         related_model="SupplyRequest",
+>         related_uuid=supply_request.uuid,
+>     )
+  
+  
+> def notify_purchase_order_approved(purchase_order):
+>     notifications = []
+  
+>     notifications.extend(
+>         notify_roles(
+>             role_codes=["ADMIN", "GERENTE", "ABASTECIMIENTO"],
+>             branch=purchase_order.branch,
+>             title="Orden de compra aprobada",
+>             message=f"La orden de compra {purchase_order.order_number} fue aprobada.",
+>             related_app="purchasing",
+>             related_model="PurchaseOrder",
+>             related_uuid=purchase_order.uuid,
+>         )
+>     )
+  
+>     notifications.extend(
+>         notify_roles(
+>             role_codes=["FINANZAS"],
+>             legal_entity=purchase_order.legal_entity,
+>             title="Orden de compra aprobada",
+>             message=f"La orden de compra {purchase_order.order_number} fue aprobada y puede requerir seguimiento financiero.",
+>             related_app="purchasing",
+>             related_model="PurchaseOrder",
+>             related_uuid=purchase_order.uuid,
+>         )
+>     )
+  
+>     return notifications
+  
+  
+> def notify_purchase_receipt_processed(purchase_receipt):
+>     purchase_order = purchase_receipt.purchase_order
+  
+>     notifications = []
+  
+>     notifications.extend(
+>         notify_roles(
+>             role_codes=["ADMIN", "GERENTE", "ABASTECIMIENTO", "BODEGUERO"],
+>             branch=purchase_receipt.branch,
+>             title="Recepción de compra procesada",
+>             message=f"Se procesó una recepción de compra para la OC {purchase_order.order_number if purchase_order else ''}.",
+>             related_app="purchasing",
+>             related_model="PurchaseReceipt",
+>             related_uuid=purchase_receipt.uuid,
+>         )
+>     )
+  
+>     if purchase_order and purchase_order.legal_entity:
+>         notifications.extend(
+>             notify_roles(
+>                 role_codes=["FINANZAS"],
+>                 legal_entity=purchase_order.legal_entity,
+>                 title="Recepción lista para revisión",
+>                 message=f"Se procesó la recepción de la OC {purchase_order.order_number}.",
+>                 related_app="purchasing",
+>                 related_model="PurchaseReceipt",
+>                 related_uuid=purchase_receipt.uuid,
+>             )
+>         )
+  
+>     return notifications
+  
+  
+> def notify_stock_transfer_approved(stock_transfer):
+>     return notify_roles(
+>         role_codes=["ADMIN", "GERENTE", "BODEGUERO", "ABASTECIMIENTO"],
+>         branch=stock_transfer.origin_branch,
+>         title="Traspaso aprobado",
+>         message=f"Se aprobó un traspaso desde {stock_transfer.origin_branch} hacia {stock_transfer.destination_branch}.",
+>         related_app="transfers",
+>         related_model="StockTransfer",
+>         related_uuid=stock_transfer.uuid,
+>     )
+  
+  
+> def notify_stock_transfer_sent(stock_transfer):
+>     return notify_roles(
+>         role_codes=["ADMIN", "GERENTE", "BODEGUERO", "JEFA_SUCURSAL"],
+>         branch=stock_transfer.destination_branch,
+>         title="Traspaso enviado",
+>         message=f"Se envió un traspaso desde {stock_transfer.origin_branch} hacia {stock_transfer.destination_branch}.",
+>         related_app="transfers",
+>         related_model="StockTransfer",
+>         related_uuid=stock_transfer.uuid,
+>     )
+  
+  
+> def notify_stock_transfer_received(stock_transfer):
+>     notifications = []
+  
+>     notifications.extend(
+>         notify_roles(
+>             role_codes=["ADMIN", "GERENTE", "BODEGUERO", "ABASTECIMIENTO"],
+>             branch=stock_transfer.origin_branch,
+>             title="Traspaso recibido",
+>             message=f"El traspaso hacia {stock_transfer.destination_branch} fue recibido.",
+>             related_app="transfers",
+>             related_model="StockTransfer",
+>             related_uuid=stock_transfer.uuid,
+>         )
+>     )
+  
+>     notifications.extend(
+>         notify_roles(
+>             role_codes=["ADMIN", "GERENTE", "BODEGUERO", "JEFA_SUCURSAL"],
+>             branch=stock_transfer.destination_branch,
+>             title="Traspaso recibido",
+>             message=f"Se recibió el traspaso desde {stock_transfer.origin_branch}.",
+>             related_app="transfers",
+>             related_model="StockTransfer",
+>             related_uuid=stock_transfer.uuid,
+>         )
+>     )
+  
+>     return notifications
+  
+  
+> def notify_low_stock(inventory_stock):
+>     branch = inventory_stock.warehouse.branch
+>     product = inventory_stock.product
+  
+>     return notify_roles(
+>         role_codes=["ADMIN", "GERENTE", "ABASTECIMIENTO", "BODEGUERO", "JEFA_SUCURSAL"],
+>         branch=branch,
+>         title="Stock bajo",
+>         message=f"El producto {product.name} tiene stock bajo en {inventory_stock.warehouse.name}. Disponible: {inventory_stock.available_quantity}.",
+>         related_app="inventory",
+>         related_model="InventoryStock",
+>         related_uuid=inventory_stock.uuid,
+>     )
+  
+  
+> def check_and_notify_low_stock(inventory_stock):
+>     """
+>     Revisa stock bajo usando BranchProduct:
+>     - critical_stock primero
+>     - min_stock como respaldo
+>     """
+>     try:
+>         from apps.products.models import BranchProduct
+!     except Exception:
+!         return []
+  
+>     branch = inventory_stock.warehouse.branch
+>     product = inventory_stock.product
+  
+>     branch_product = BranchProduct.objects.filter(
+>         branch=branch,
+>         product=product,
+>         is_active=True,
+>     ).first()
+  
+>     if not branch_product:
+>         return []
+  
+>     threshold = branch_product.critical_stock or branch_product.min_stock
+  
+>     if threshold is None:
+!         return []
+  
+>     if inventory_stock.available_quantity <= threshold:
+>         return notify_low_stock(inventory_stock)
+  
+!     return []

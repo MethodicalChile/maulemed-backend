@@ -1,0 +1,293 @@
+from django.conf import settings
+from django.db import models
+from django.core.exceptions import ValidationError
+
+from apps.common.models import BaseModel
+from apps.organizations.models import LegalEntity, Branch, CostCenter
+from apps.products.models import ProductCategory
+from apps.suppliers.models import Supplier
+from apps.purchasing.models import PurchaseOrder
+
+
+class SupplierInvoice(BaseModel):
+    STATUS_RECEIVED = "RECIBIDA"
+    STATUS_VALIDATED = "VALIDADA"
+    STATUS_OBSERVED = "OBSERVADA"
+    STATUS_PARTIALLY_PAID = "PARCIALMENTE_PAGADA"
+    STATUS_PAID = "PAGADA"
+    STATUS_CANCELLED = "ANULADA"
+
+    STATUS_CHOICES = [
+        (STATUS_RECEIVED, "Recibida"),
+        (STATUS_VALIDATED, "Validada"),
+        (STATUS_OBSERVED, "Observada"),
+        (STATUS_PARTIALLY_PAID, "Parcialmente pagada"),
+        (STATUS_PAID, "Pagada"),
+        (STATUS_CANCELLED, "Anulada"),
+    ]
+
+    supplier = models.ForeignKey(
+        Supplier,
+        on_delete=models.SET_NULL,
+        related_name="invoices",
+        blank=True,
+        null=True,
+    )
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoices",
+        blank=True,
+        null=True,
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoices",
+        blank=True,
+        null=True,
+    )
+    cost_center = models.ForeignKey(
+        CostCenter,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoices",
+        blank=True,
+        null=True,
+    )
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoices",
+        blank=True,
+        null=True,
+    )
+
+    invoice_number = models.CharField(max_length=100)
+    issue_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
+
+    net_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    status = models.CharField(
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default=STATUS_RECEIVED,
+    )
+
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "supplier_invoices"
+        verbose_name = "Supplier Invoice"
+        verbose_name_plural = "Supplier Invoices"
+        indexes = [
+            models.Index(fields=["supplier"], name="idx_invoice_supplier"),
+            models.Index(fields=["legal_entity"], name="idx_invoice_legal_entity"),
+            models.Index(fields=["branch"], name="idx_invoice_branch"),
+            models.Index(fields=["status"], name="idx_invoice_status"),
+            models.Index(fields=["invoice_number"], name="idx_invoice_number"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["supplier", "invoice_number"],
+                name="uq_supplier_invoice_number",
+            ),
+            models.CheckConstraint(
+                check=models.Q(net_amount__gte=0),
+                name="chk_invoice_net_non_negative",
+            ),
+            models.CheckConstraint(
+                check=models.Q(tax_amount__gte=0),
+                name="chk_invoice_tax_non_negative",
+            ),
+            models.CheckConstraint(
+                check=models.Q(total_amount__gte=0),
+                name="chk_invoice_total_non_negative",
+            ),
+        ]
+
+    def clean(self):
+        if self.issue_date and self.due_date and self.due_date < self.issue_date:
+            raise ValidationError("La fecha de vencimiento no puede ser anterior a la fecha de emisión.")
+
+    def __str__(self):
+        supplier_name = self.supplier.name if self.supplier else "Sin proveedor"
+        return f"{supplier_name} - {self.invoice_number}"
+
+
+class Payment(BaseModel):
+    METHOD_TRANSFER = "TRANSFERENCIA"
+    METHOD_CHECK = "CHEQUE"
+    METHOD_CASH = "EFECTIVO"
+    METHOD_CARD = "TARJETA"
+    METHOD_OTHER = "OTRO"
+
+    METHOD_CHOICES = [
+        (METHOD_TRANSFER, "Transferencia"),
+        (METHOD_CHECK, "Cheque"),
+        (METHOD_CASH, "Efectivo"),
+        (METHOD_CARD, "Tarjeta"),
+        (METHOD_OTHER, "Otro"),
+    ]
+
+    STATUS_PENDING = "PENDIENTE"
+    STATUS_PAID = "PAGADO"
+    STATUS_CANCELLED = "ANULADO"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pendiente"),
+        (STATUS_PAID, "Pagado"),
+        (STATUS_CANCELLED, "Anulado"),
+    ]
+
+    supplier_invoice = models.ForeignKey(
+        SupplierInvoice,
+        on_delete=models.SET_NULL,
+        related_name="payments",
+        blank=True,
+        null=True,
+    )
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.SET_NULL,
+        related_name="payments",
+        blank=True,
+        null=True,
+    )
+
+    payment_method = models.CharField(
+        max_length=50,
+        choices=METHOD_CHOICES,
+        default=METHOD_TRANSFER,
+    )
+    payment_date = models.DateField(blank=True, null=True)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+
+    status = models.CharField(
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+    )
+
+    check_number = models.CharField(max_length=100, blank=True, null=True)
+    bank_account = models.CharField(max_length=100, blank=True, null=True)
+    transaction_reference = models.CharField(max_length=150, blank=True, null=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="created_payments",
+        blank=True,
+        null=True,
+    )
+
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "payments"
+        verbose_name = "Payment"
+        verbose_name_plural = "Payments"
+        indexes = [
+            models.Index(fields=["supplier_invoice"], name="idx_payment_invoice"),
+            models.Index(fields=["legal_entity"], name="idx_payment_legal_entity"),
+            models.Index(fields=["status"], name="idx_payment_status"),
+            models.Index(fields=["payment_date"], name="idx_payment_date"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount__gt=0),
+                name="chk_payment_amount_positive",
+            )
+        ]
+
+    def clean(self):
+        if self.payment_method == self.METHOD_CHECK and not self.check_number:
+            raise ValidationError("El pago por cheque requiere número de cheque.")
+
+    def __str__(self):
+        return f"{self.payment_method} - {self.amount}"
+
+
+class Budget(BaseModel):
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.CASCADE,
+        related_name="budgets",
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.CASCADE,
+        related_name="budgets",
+        blank=True,
+        null=True,
+    )
+    cost_center = models.ForeignKey(
+        CostCenter,
+        on_delete=models.CASCADE,
+        related_name="budgets",
+        blank=True,
+        null=True,
+    )
+    category = models.ForeignKey(
+        ProductCategory,
+        on_delete=models.SET_NULL,
+        related_name="budgets",
+        blank=True,
+        null=True,
+    )
+
+    period_year = models.IntegerField()
+    period_month = models.IntegerField()
+
+    budget_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    consumed_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "budgets"
+        verbose_name = "Budget"
+        verbose_name_plural = "Budgets"
+        indexes = [
+            models.Index(fields=["legal_entity"], name="idx_budget_legal_entity"),
+            models.Index(fields=["branch"], name="idx_budget_branch"),
+            models.Index(fields=["period_year", "period_month"], name="idx_budget_period"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(period_month__gte=1) & models.Q(period_month__lte=12),
+                name="chk_budget_month",
+            ),
+            models.CheckConstraint(
+                check=models.Q(budget_amount__gte=0),
+                name="chk_budget_amount_non_negative",
+            ),
+            models.CheckConstraint(
+                check=models.Q(consumed_amount__gte=0),
+                name="chk_budget_consumed_non_negative",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "legal_entity",
+                    "branch",
+                    "cost_center",
+                    "category",
+                    "period_year",
+                    "period_month",
+                ],
+                name="uq_budget_scope",
+            ),
+        ]
+
+    @property
+    def available_amount(self):
+        return self.budget_amount - self.consumed_amount
+
+    def clean(self):
+        if self.consumed_amount > self.budget_amount:
+            raise ValidationError("El monto consumido no puede superar el presupuesto.")
+
+    def __str__(self):
+        return f"{self.legal_entity} - {self.period_month}/{self.period_year}"

@@ -1,0 +1,37 @@
+> from django.urls import path
+  
+> from .views import (
+>     inventory_stock_report,
+>     inventory_movements_report,
+>     purchases_report,
+>     supplier_spending_report,
+>     branch_consumption_report,
+>     finance_summary_report,
+  
+>     inventory_stock_export_csv,
+>     inventory_movements_export_csv,
+>     purchases_export_csv,
+>     supplier_spending_export_csv,
+>     branch_consumption_export_csv,
+>     finance_summary_export_csv,
+>     stock_history_report,
+> )
+  
+  
+> urlpatterns = [
+>     path("reports/inventory-stock/", inventory_stock_report, name="reports-inventory-stock"),
+>     path("reports/inventory-movements/", inventory_movements_report, name="reports-inventory-movements"),
+>     path("reports/purchases/", purchases_report, name="reports-purchases"),
+>     path("reports/supplier-spending/", supplier_spending_report, name="reports-supplier-spending"),
+>     path("reports/branch-consumption/", branch_consumption_report, name="reports-branch-consumption"),
+>     path("reports/finance-summary/", finance_summary_report, name="reports-finance-summary"),
+  
+>     path("reports/inventory-stock/export-csv/", inventory_stock_export_csv, name="reports-inventory-stock-export-csv"),
+>     path("reports/inventory-movements/export-csv/", inventory_movements_export_csv, name="reports-inventory-movements-export-csv"),
+>     path("reports/purchases/export-csv/", purchases_export_csv, name="reports-purchases-export-csv"),
+>     path("reports/supplier-spending/export-csv/", supplier_spending_export_csv, name="reports-supplier-spending-export-csv"),
+>     path("reports/branch-consumption/export-csv/", branch_consumption_export_csv, name="reports-branch-consumption-export-csv"),
+>     path("reports/finance-summary/export-csv/", finance_summary_export_csv, name="reports-finance-summary-export-csv"),
+  
+>     path("reports/stock-history/", stock_history_report, name="reports-stock-history"),
+> ]

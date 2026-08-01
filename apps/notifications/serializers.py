@@ -1,0 +1,12 @@
+from rest_framework import serializers
+
+from apps.accounts.serializers import UserSerializer
+from .models import Notification
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    user_detail = UserSerializer(source="user", read_only=True)
+
+    class Meta:
+        model = Notification
+        exclude = ["id", "deleted_at"]

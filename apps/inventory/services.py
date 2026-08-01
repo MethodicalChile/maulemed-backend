@@ -1,0 +1,373 @@
+import logging
+from decimal import Decimal
+
+from django.db import transaction
+from django.core.exceptions import ValidationError
+from apps.common.business_validations import validate_positive_quantity
+from django.utils import timezone
+
+from apps.notifications.services import check_and_notify_low_stock
+
+from apps.inventory.models import (
+    InventoryStock,
+    InventoryLot,
+    InventoryMovement,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def to_decimal(value):
+    if value is None:
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def get_or_create_stock(warehouse, product):
+    stock, _ = InventoryStock.objects.get_or_create(
+        warehouse=warehouse,
+        product=product,
+        defaults={
+            "quantity": Decimal("0"),
+            "reserved_quantity": Decimal("0"),
+        },
+    )
+    return stock
+
+
+def validate_available_stock(stock, quantity):
+    quantity = to_decimal(quantity)
+    validate_positive_quantity(quantity, "La cantidad debe ser mayor a cero.")
+    if stock.available_quantity < quantity:
+        raise ValidationError(
+            f"Stock insuficiente. Disponible: {stock.available_quantity}, requerido: {quantity}."
+        )
+
+
+def create_inventory_movement(
+    *,
+    movement_type,
+    product,
+    quantity,
+    warehouse_origin=None,
+    warehouse_destination=None,
+    lot=None,
+    reason=None,
+    reference_type=None,
+    reference_uuid=None,
+    created_by_uuid=None,
+    approved_by_uuid=None,
+):
+    quantity = to_decimal(quantity)
+
+    movement = InventoryMovement.objects.create(
+        movement_type=movement_type,
+        warehouse_origin=warehouse_origin,
+        warehouse_destination=warehouse_destination,
+        product=product,
+        lot=lot,
+        quantity=quantity,
+        reason=reason,
+        reference_type=reference_type,
+        reference_uuid=reference_uuid,
+        created_by_uuid=created_by_uuid,
+        approved_by_uuid=approved_by_uuid,
+    )
+
+    logger.info(
+        f"Movimiento inventario creado tipo={movement_type} producto={product} cantidad={quantity}"
+    )
+
+    return movement
+
+
+@transaction.atomic
+def increase_stock(
+    *,
+    warehouse,
+    product,
+    quantity,
+    lot_number=None,
+    expiration_date=None,
+    supplier=None,
+    reason=None,
+    reference_type=None,
+    reference_uuid=None,
+    created_by_uuid=None,
+    movement_type=InventoryMovement.TYPE_PURCHASE_IN,
+):
+    quantity = to_decimal(quantity)
+
+    if quantity <= 0:
+        raise ValidationError("La cantidad a ingresar debe ser mayor a cero.")
+
+    stock = get_or_create_stock(warehouse, product)
+    stock.quantity = stock.quantity + quantity
+    stock.save(update_fields=["quantity", "updated_at"])
+
+    lot = None
+
+    if product.requires_lot or product.requires_expiration_date or lot_number or expiration_date:
+        if product.requires_lot and not lot_number:
+            raise ValidationError("Este producto requiere número de lote.")
+
+        if product.requires_expiration_date and not expiration_date:
+            raise ValidationError("Este producto requiere fecha de vencimiento.")
+
+        lot, _ = InventoryLot.objects.get_or_create(
+            warehouse=warehouse,
+            product=product,
+            lot_number=lot_number,
+            expiration_date=expiration_date,
+            defaults={
+                "supplier": supplier,
+                "quantity": Decimal("0"),
+                "status": InventoryLot.STATUS_AVAILABLE,
+                "received_at": timezone.now(),
+            },
+        )
+
+        lot.quantity = lot.quantity + quantity
+
+        if supplier and not lot.supplier:
+            lot.supplier = supplier
+
+        lot.status = InventoryLot.STATUS_AVAILABLE
+        lot.save(update_fields=["quantity", "supplier", "status", "updated_at"])
+
+    movement = create_inventory_movement(
+        movement_type=movement_type,
+        warehouse_destination=warehouse,
+        product=product,
+        lot=lot,
+        quantity=quantity,
+        reason=reason or "Ingreso de stock",
+        reference_type=reference_type,
+        reference_uuid=reference_uuid,
+        created_by_uuid=created_by_uuid,
+    )
+
+    logger.info(
+        f"Stock aumentado warehouse={warehouse} product={product} quantity={quantity}"
+    )
+
+    return {
+        "stock": stock,
+        "lot": lot,
+        "movement": movement,
+    }
+
+
+@transaction.atomic
+def decrease_stock(
+    *,
+    warehouse,
+    product,
+    quantity,
+    lot=None,
+    movement_type=InventoryMovement.TYPE_CONSUMPTION_OUT,
+    reason=None,
+    reference_type=None,
+    reference_uuid=None,
+    created_by_uuid=None,
+):
+    quantity = to_decimal(quantity)
+
+    if quantity <= 0:
+        raise ValidationError("La cantidad a descontar debe ser mayor a cero.")
+
+    stock = get_or_create_stock(warehouse, product)
+    validate_available_stock(stock, quantity)
+
+    stock.quantity = stock.quantity - quantity
+    stock.save(update_fields=["quantity", "updated_at"])
+
+    if lot:
+        if lot.quantity < quantity:
+            raise ValidationError(
+                f"Stock insuficiente en lote. Disponible: {lot.quantity}, requerido: {quantity}."
+            )
+
+        lot.quantity = lot.quantity - quantity
+
+        if lot.quantity == 0:
+            lot.status = InventoryLot.STATUS_CONSUMED
+
+        lot.save(update_fields=["quantity", "status", "updated_at"])
+
+    movement = create_inventory_movement(
+        movement_type=movement_type,
+        warehouse_origin=warehouse,
+        product=product,
+        lot=lot,
+        quantity=quantity,
+        reason=reason or "Egreso de stock",
+        reference_type=reference_type,
+        reference_uuid=reference_uuid,
+        created_by_uuid=created_by_uuid,
+    )
+
+    try:
+        check_and_notify_low_stock(stock)
+    except Exception as exc:
+        logger.exception(f"No se pudo notificar stock bajo: {exc}")
+
+    logger.info(
+        f"Stock descontado warehouse={warehouse} product={product} quantity={quantity}"
+    )
+
+    return {
+        "stock": stock,
+        "lot": lot,
+        "movement": movement,
+    }
+
+
+@transaction.atomic
+def reserve_stock(
+    *,
+    warehouse,
+    product,
+    quantity,
+):
+    quantity = to_decimal(quantity)
+
+    if quantity <= 0:
+        raise ValidationError("La cantidad a reservar debe ser mayor a cero.")
+
+    stock = get_or_create_stock(warehouse, product)
+    validate_available_stock(stock, quantity)
+
+    stock.reserved_quantity = stock.reserved_quantity + quantity
+    stock.save(update_fields=["reserved_quantity", "updated_at"])
+
+    try:
+        check_and_notify_low_stock(stock)
+    except Exception as exc:
+        logger.exception(f"No se pudo notificar stock bajo: {exc}")
+
+    logger.info(
+        f"Stock reservado warehouse={warehouse} product={product} quantity={quantity}"
+    )
+
+    return stock
+
+
+@transaction.atomic
+def release_reserved_stock(
+    *,
+    warehouse,
+    product,
+    quantity,
+):
+    quantity = to_decimal(quantity)
+
+    if quantity <= 0:
+        raise ValidationError("La cantidad a liberar debe ser mayor a cero.")
+
+    stock = get_or_create_stock(warehouse, product)
+
+    if stock.reserved_quantity < quantity:
+        raise ValidationError(
+            f"No se puede liberar más stock del reservado. Reservado: {stock.reserved_quantity}, solicitado: {quantity}."
+        )
+
+    stock.reserved_quantity = stock.reserved_quantity - quantity
+    stock.save(update_fields=["reserved_quantity", "updated_at"])
+
+    logger.info(
+        f"Stock reservado liberado warehouse={warehouse} product={product} quantity={quantity}"
+    )
+
+    return stock
+
+
+@transaction.atomic
+def adjust_stock(
+    *,
+    warehouse,
+    product,
+    quantity,
+    reason,
+    created_by_uuid=None,
+):
+    quantity = to_decimal(quantity)
+
+    if quantity == 0:
+        raise ValidationError("El ajuste no puede ser cero.")
+
+    if quantity > 0:
+        return increase_stock(
+            warehouse=warehouse,
+            product=product,
+            quantity=quantity,
+            reason=reason,
+            reference_type="AJUSTE_INVENTARIO",
+            created_by_uuid=created_by_uuid,
+            movement_type=InventoryMovement.TYPE_ADJUSTMENT_IN,
+        )
+
+    return decrease_stock(
+        warehouse=warehouse,
+        product=product,
+        quantity=abs(quantity),
+        movement_type=InventoryMovement.TYPE_ADJUSTMENT_OUT,
+        reason=reason,
+        reference_type="AJUSTE_INVENTARIO",
+        created_by_uuid=created_by_uuid,
+    )
+
+
+@transaction.atomic
+def transfer_stock_between_warehouses(
+    *,
+    origin_warehouse,
+    destination_warehouse,
+    product,
+    quantity,
+    lot=None,
+    reason=None,
+    reference_type=None,
+    reference_uuid=None,
+    created_by_uuid=None,
+):
+    quantity = to_decimal(quantity)
+
+    if origin_warehouse == destination_warehouse:
+        raise ValidationError("La bodega de origen y destino no pueden ser iguales.")
+
+    decrease_result = decrease_stock(
+        warehouse=origin_warehouse,
+        product=product,
+        quantity=quantity,
+        lot=lot,
+        movement_type=InventoryMovement.TYPE_TRANSFER,
+        reason=reason or "Salida por traspaso",
+        reference_type=reference_type,
+        reference_uuid=reference_uuid,
+        created_by_uuid=created_by_uuid,
+    )
+
+    increase_result = increase_stock(
+        warehouse=destination_warehouse,
+        product=product,
+        quantity=quantity,
+        lot_number=lot.lot_number if lot else None,
+        expiration_date=lot.expiration_date if lot else None,
+        supplier=lot.supplier if lot else None,
+        reason=reason or "Ingreso por traspaso",
+        movement_type=InventoryMovement.TYPE_TRANSFER,
+        reference_type=reference_type,
+        reference_uuid=reference_uuid,
+        created_by_uuid=created_by_uuid,
+    )
+
+    logger.info(
+        f"Traspaso stock completado origin={origin_warehouse} destination={destination_warehouse} product={product} quantity={quantity}"
+    )
+
+    return {
+        "decrease": decrease_result,
+        "increase": increase_result,
+    }

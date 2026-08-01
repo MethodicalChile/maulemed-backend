@@ -1,0 +1,36 @@
+> from django.contrib import admin
+  
+> from .models import AuditLog
+  
+  
+> @admin.register(AuditLog)
+> class AuditLogAdmin(admin.ModelAdmin):
+>     list_display = (
+>         "uuid",
+>         "user",
+>         "action",
+>         "entity_app",
+>         "entity_model",
+>         "entity_uuid",
+>         "created_at",
+>     )
+>     search_fields = (
+>         "uuid",
+>         "user__username",
+>         "entity_app",
+>         "entity_model",
+>         "entity_uuid",
+>         "notes",
+>     )
+>     list_filter = (
+>         "action",
+>         "entity_app",
+>         "entity_model",
+>         "created_at",
+>     )
+>     readonly_fields = (
+>         "uuid",
+>         "created_at",
+>         "updated_at",
+>         "deleted_at",
+>     )

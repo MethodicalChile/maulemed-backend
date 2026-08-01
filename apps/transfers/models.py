@@ -1,0 +1,215 @@
+from django.conf import settings
+from django.db import models
+from django.core.exceptions import ValidationError
+
+from apps.common.models import BaseModel
+from apps.organizations.models import Branch
+from apps.products.models import Product
+from apps.inventory.models import InventoryLot
+
+
+class StockTransfer(BaseModel):
+    STATUS_REQUESTED = "SOLICITADO"
+    STATUS_APPROVED = "APROBADO"
+    STATUS_REJECTED = "RECHAZADO"
+    STATUS_SENT = "ENVIADO"
+    STATUS_RECEIVED = "RECIBIDO"
+    STATUS_RETURNED = "DEVUELTO"
+    STATUS_CLOSED = "CERRADO"
+    STATUS_CANCELLED = "CANCELADO"
+
+    STATUS_CHOICES = [
+        (STATUS_REQUESTED, "Solicitado"),
+        (STATUS_APPROVED, "Aprobado"),
+        (STATUS_REJECTED, "Rechazado"),
+        (STATUS_SENT, "Enviado"),
+        (STATUS_RECEIVED, "Recibido"),
+        (STATUS_RETURNED, "Devuelto"),
+        (STATUS_CLOSED, "Cerrado"),
+        (STATUS_CANCELLED, "Cancelado"),
+    ]
+
+    TRANSFER_TYPE_TRANSFER = "TRASPASO"
+    TRANSFER_TYPE_LOAN = "PRESTAMO"
+    TRANSFER_TYPE_RETURN = "DEVOLUCION"
+
+    TRANSFER_TYPE_CHOICES = [
+        (TRANSFER_TYPE_TRANSFER, "Traspaso"),
+        (TRANSFER_TYPE_LOAN, "Préstamo"),
+        (TRANSFER_TYPE_RETURN, "Devolución"),
+    ]
+
+    origin_branch = models.ForeignKey(
+        Branch,
+        on_delete=models.CASCADE,
+        related_name="outgoing_stock_transfers",
+    )
+    destination_branch = models.ForeignKey(
+        Branch,
+        on_delete=models.CASCADE,
+        related_name="incoming_stock_transfers",
+    )
+
+    transfer_type = models.CharField(
+        max_length=50,
+        choices=TRANSFER_TYPE_CHOICES,
+        default=TRANSFER_TYPE_TRANSFER,
+    )
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="requested_stock_transfers",
+        blank=True,
+        null=True,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="approved_stock_transfers",
+        blank=True,
+        null=True,
+    )
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="sent_stock_transfers",
+        blank=True,
+        null=True,
+    )
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="received_stock_transfers",
+        blank=True,
+        null=True,
+    )
+
+    status = models.CharField(
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default=STATUS_REQUESTED,
+    )
+
+    reason = models.TextField(blank=True, null=True)
+    rejection_reason = models.TextField(blank=True, null=True)
+
+    dispatch_guide_number = models.CharField(max_length=100, blank=True, null=True)
+    internal_guide_number = models.CharField(max_length=100, blank=True, null=True)
+
+    parent_transfer = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="return_transfers",
+        blank=True,
+        null=True,
+        help_text="Se usa cuando este registro es devolución de un préstamo anterior.",
+    )
+
+    requested_at = models.DateTimeField(blank=True, null=True)
+    approved_at = models.DateTimeField(blank=True, null=True)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    received_at = models.DateTimeField(blank=True, null=True)
+    closed_at = models.DateTimeField(blank=True, null=True)
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "stock_transfers"
+        verbose_name = "Stock Transfer"
+        verbose_name_plural = "Stock Transfers"
+        indexes = [
+            models.Index(fields=["origin_branch"], name="idx_transfer_origin"),
+            models.Index(fields=["destination_branch"], name="idx_transfer_destination"),
+            models.Index(fields=["status"], name="idx_transfer_status"),
+            models.Index(fields=["transfer_type"], name="idx_transfer_type"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(origin_branch=models.F("destination_branch")),
+                name="chk_transfer_different_branches",
+            )
+        ]
+
+    def clean(self):
+        if self.origin_branch_id and self.destination_branch_id:
+            if self.origin_branch_id == self.destination_branch_id:
+                raise ValidationError("La sucursal de origen y destino no pueden ser iguales.")
+
+        if self.transfer_type == self.TRANSFER_TYPE_RETURN and not self.parent_transfer:
+            raise ValidationError("Una devolución debe estar asociada a un préstamo anterior.")
+
+    def __str__(self):
+        return f"{self.transfer_type} {self.origin_branch} -> {self.destination_branch}"
+
+
+class StockTransferItem(BaseModel):
+    stock_transfer = models.ForeignKey(
+        StockTransfer,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name="stock_transfer_items",
+    )
+    lot = models.ForeignKey(
+        InventoryLot,
+        on_delete=models.SET_NULL,
+        related_name="stock_transfer_items",
+        blank=True,
+        null=True,
+    )
+
+    requested_quantity = models.DecimalField(max_digits=14, decimal_places=3)
+    approved_quantity = models.DecimalField(max_digits=14, decimal_places=3, blank=True, null=True)
+    sent_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+    received_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+    returned_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+
+    comments = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "stock_transfer_items"
+        verbose_name = "Stock Transfer Item"
+        verbose_name_plural = "Stock Transfer Items"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(requested_quantity__gt=0),
+                name="chk_transfer_requested_positive",
+            ),
+            models.CheckConstraint(
+                check=models.Q(sent_quantity__gte=0),
+                name="chk_transfer_sent_non_negative",
+            ),
+            models.CheckConstraint(
+                check=models.Q(received_quantity__gte=0),
+                name="chk_transfer_received_non_negative",
+            ),
+            models.CheckConstraint(
+                check=models.Q(returned_quantity__gte=0),
+                name="chk_transfer_returned_non_negative",
+            ),
+        ]
+
+    def clean(self):
+        if self.approved_quantity is not None and self.approved_quantity < 0:
+            raise ValidationError("La cantidad aprobada no puede ser negativa.")
+
+        if self.approved_quantity is not None and self.approved_quantity > self.requested_quantity:
+            raise ValidationError("La cantidad aprobada no puede superar la cantidad solicitada.")
+
+        if self.sent_quantity and self.approved_quantity is not None:
+            if self.sent_quantity > self.approved_quantity:
+                raise ValidationError("La cantidad enviada no puede superar la cantidad aprobada.")
+
+        if self.received_quantity and self.sent_quantity:
+            if self.received_quantity > self.sent_quantity:
+                raise ValidationError("La cantidad recibida no puede superar la cantidad enviada.")
+
+        if self.returned_quantity and self.received_quantity:
+            if self.returned_quantity > self.received_quantity:
+                raise ValidationError("La cantidad devuelta no puede superar la cantidad recibida.")
+
+    def __str__(self):
+        return f"{self.stock_transfer} - {self.product}"

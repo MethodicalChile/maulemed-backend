@@ -1,0 +1,315 @@
+> from rest_framework.permissions import BasePermission, SAFE_METHODS
+  
+  
+> def get_user_role_codes(user):
+>     if not user or not user.is_authenticated:
+>         return []
+  
+>     return list(
+>         user.role_assignments.filter(is_active=True)
+>         .select_related("role")
+>         .values_list("role__code", flat=True)
+>     )
+  
+  
+> def user_has_any_role(user, allowed_roles):
+>     if not user or not user.is_authenticated:
+>         return False
+  
+>     if user.is_superuser:
+>         return True
+  
+>     roles = get_user_role_codes(user)
+>     return any(role in roles for role in allowed_roles)
+  
+  
+> class HasAnyRole(BasePermission):
+>     allowed_roles = []
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class IsAdminRole(BasePermission):
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, ["ADMIN"])
+  
+  
+> class IsAdminOrGerente(HasAnyRole):
+>     allowed_roles = ["ADMIN", "GERENTE"]
+  
+  
+> class CanManageCatalogs(BasePermission):
+>     """
+>     Productos, categorías, unidades, proveedores.
+>     """
+  
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "FINANZAS",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>         "DOCTOR",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanManageSuppliers(BasePermission):
+>     """
+>     Proveedores y productos de proveedor.
+>     """
+  
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "FINANZAS",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanViewInventory(BasePermission):
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>         "DOCTOR",
+>     ]
+  
+>     def has_permission(self, request, view):
+!         return user_has_any_role(request.user, self.read_roles)
+  
+  
+> class CanManageInventory(BasePermission):
+>     """
+>     Inventario general.
+>     Lectura amplia, escritura restringida.
+>     """
+  
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>         "DOCTOR",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanCreateSupplyRequest(BasePermission):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>         "DOCTOR",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class CanApproveSupplyRequest(BasePermission):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class CanManagePurchasing(BasePermission):
+>     """
+>     Módulo compras.
+>     """
+  
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "FINANZAS",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanApprovePurchaseOrder(BasePermission):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class CanReceivePurchase(BasePermission):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class CanManageTransfers(BasePermission):
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "SECRETARIA",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>         "TENS",
+>         "TECNOLOGA_MEDICA",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanApproveTransfer(BasePermission):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         return user_has_any_role(request.user, self.allowed_roles)
+  
+  
+> class CanManageFinance(BasePermission):
+>     read_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "FINANZAS",
+>     ]
+  
+>     write_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "FINANZAS",
+>     ]
+  
+>     def has_permission(self, request, view):
+>         if request.method in SAFE_METHODS:
+>             return user_has_any_role(request.user, self.read_roles)
+  
+>         return user_has_any_role(request.user, self.write_roles)
+  
+  
+> class CanManageDocuments(HasAnyRole):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>         "ABASTECIMIENTO",
+>         "FINANZAS",
+>         "RRHH",
+>         "BODEGUERO",
+>         "JEFA_SUCURSAL",
+>     ]
+  
+  
+> class CanViewAudit(HasAnyRole):
+>     allowed_roles = [
+>         "ADMIN",
+>         "GERENTE",
+>     ]

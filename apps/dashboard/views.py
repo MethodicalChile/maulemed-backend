@@ -1,0 +1,347 @@
+from datetime import timedelta
+
+from django.db.models import Sum, Count
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+from apps.common.responses import api_response
+from apps.common.permissions import user_has_any_role
+from apps.common.scopes import apply_branch_scope, apply_legal_entity_scope
+
+from apps.inventory.models import InventoryStock, InventoryLot
+from apps.purchasing.models import (
+    SupplyRequest,
+    PurchaseOrder,
+    PurchaseReceipt,
+)
+from apps.finance.models import SupplierInvoice, Payment, Budget
+from apps.notifications.models import Notification
+
+
+def _is_finance_user(user):
+    return user_has_any_role(user, ["ADMIN", "GERENTE", "FINANZAS"])
+
+
+def _is_inventory_user(user):
+    return user_has_any_role(
+        user,
+        [
+            "ADMIN",
+            "GERENTE",
+            "ABASTECIMIENTO",
+            "BODEGUERO",
+            "JEFA_SUCURSAL",
+            "SECRETARIA",
+            "TENS",
+            "TECNOLOGA_MEDICA",
+            "DOCTOR",
+        ],
+    )
+
+
+def _is_purchasing_user(user):
+    return user_has_any_role(
+        user,
+        [
+            "ADMIN",
+            "GERENTE",
+            "ABASTECIMIENTO",
+            "FINANZAS",
+            "BODEGUERO",
+            "JEFA_SUCURSAL",
+            "SECRETARIA",
+            "TENS",
+            "TECNOLOGA_MEDICA",
+        ],
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_summary(request):
+    user = request.user
+
+    unread_notifications = Notification.objects.filter(
+        user=user,
+        is_read=False,
+    ).count()
+
+    data = {
+        "unread_notifications": unread_notifications,
+        "inventory": None,
+        "purchasing": None,
+        "finance": None,
+    }
+
+    if _is_inventory_user(user):
+        from apps.products.models import BranchProduct
+
+        stocks_qs = InventoryStock.objects.select_related(
+            "warehouse",
+            "warehouse__branch",
+            "product",
+        ).all()
+
+        stocks_qs = apply_branch_scope(
+            stocks_qs,
+            user,
+            branch_field="warehouse__branch",
+        )
+
+        # Cargar todos los BranchProduct relevantes de una sola query
+        # para evitar N+1 al calcular cuántos stocks están bajo el umbral
+        branch_ids = stocks_qs.values_list("warehouse__branch_id", flat=True).distinct()
+        product_ids = stocks_qs.values_list("product_id", flat=True).distinct()
+
+        branch_products = {
+            (bp.product_id, bp.branch_id): bp
+            for bp in BranchProduct.objects.filter(
+                branch_id__in=branch_ids,
+                product_id__in=product_ids,
+                is_active=True,
+            )
+        }
+
+        low_stock_count = 0
+        for stock in stocks_qs:
+            bp = branch_products.get((stock.product_id, stock.warehouse.branch_id))
+            if bp:
+                threshold = bp.critical_stock or bp.min_stock
+                if threshold is not None and stock.available_quantity <= threshold:
+                    low_stock_count += 1
+
+        expiring_limit = timezone.now().date() + timedelta(days=30)
+
+        lots_qs = InventoryLot.objects.select_related(
+            "warehouse",
+            "warehouse__branch",
+            "product",
+        ).all()
+
+        lots_qs = apply_branch_scope(
+            lots_qs,
+            user,
+            branch_field="warehouse__branch",
+        )
+
+        expiring_soon_count = lots_qs.filter(
+            expiration_date__isnull=False,
+            expiration_date__gte=timezone.now().date(),
+            expiration_date__lte=expiring_limit,
+        ).count()
+
+        expired_count = lots_qs.filter(
+            expiration_date__isnull=False,
+            expiration_date__lt=timezone.now().date(),
+        ).count()
+
+        data["inventory"] = {
+            "stock_items": stocks_qs.count(),
+            "low_stock_count": low_stock_count,
+            "expiring_soon_count": expiring_soon_count,
+            "expired_count": expired_count,
+        }
+
+    if _is_purchasing_user(user):
+        supply_qs = SupplyRequest.objects.select_related("branch").all()
+        supply_qs = apply_branch_scope(supply_qs, user, branch_field="branch")
+
+        po_qs = PurchaseOrder.objects.select_related("branch").all()
+        po_qs = apply_branch_scope(po_qs, user, branch_field="branch")
+
+        receipt_qs = PurchaseReceipt.objects.select_related("branch").all()
+        receipt_qs = apply_branch_scope(receipt_qs, user, branch_field="branch")
+
+        data["purchasing"] = {
+            "supply_requests_total": supply_qs.count(),
+            "supply_requests_pending": supply_qs.exclude(
+                status__in=["APROBADA", "RECHAZADA", "CERRADA", "CANCELADA"]
+            ).count(),
+            "purchase_orders_total": po_qs.count(),
+            "purchase_orders_pending": po_qs.exclude(
+                status__in=["RECIBIDA", "CERRADA", "CANCELADA"]
+            ).count(),
+            "pending_receipts": receipt_qs.exclude(
+                status__in=["PROCESADA", "COMPLETADA", "CERRADA"]
+            ).count(),
+        }
+
+    if _is_finance_user(user):
+        invoices_qs = SupplierInvoice.objects.select_related("legal_entity").all()
+        invoices_qs = apply_legal_entity_scope(
+            invoices_qs,
+            user,
+            legal_entity_field="legal_entity",
+        )
+
+        payments_qs = Payment.objects.select_related("legal_entity").all()
+        payments_qs = apply_legal_entity_scope(
+            payments_qs,
+            user,
+            legal_entity_field="legal_entity",
+        )
+
+        budgets_qs = Budget.objects.select_related("legal_entity").all()
+        budgets_qs = apply_legal_entity_scope(
+            budgets_qs,
+            user,
+            legal_entity_field="legal_entity",
+        )
+
+        data["finance"] = {
+            "supplier_invoices_total": invoices_qs.count(),
+            "supplier_invoices_pending": invoices_qs.exclude(
+                status__in=["PAGADA", "ANULADA", "CANCELADA"]
+            ).count(),
+            "total_invoiced_amount": invoices_qs.aggregate(
+                total=Sum("total_amount")
+            )["total"] or 0,
+            "total_paid_amount": payments_qs.aggregate(
+                total=Sum("amount")
+            )["total"] or 0,
+            "budgets_total": budgets_qs.count(),
+            "budget_amount_total": budgets_qs.aggregate(
+                total=Sum("budget_amount")
+            )["total"] or 0,
+            "budget_consumed_total": budgets_qs.aggregate(
+                total=Sum("consumed_amount")
+            )["total"] or 0,
+        }
+
+    return api_response(
+        data=data,
+        message="Resumen de dashboard obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_inventory(request):
+    user = request.user
+
+    stocks_qs = InventoryStock.objects.select_related(
+        "warehouse",
+        "warehouse__branch",
+        "product",
+    ).all()
+    stocks_qs = apply_branch_scope(stocks_qs, user, branch_field="warehouse__branch")
+
+    lots_qs = InventoryLot.objects.select_related(
+        "warehouse",
+        "warehouse__branch",
+        "product",
+    ).all()
+    lots_qs = apply_branch_scope(lots_qs, user, branch_field="warehouse__branch")
+
+    today = timezone.now().date()
+    expiring_limit = today + timedelta(days=30)
+
+    data = {
+        "stock_items": stocks_qs.count(),
+        "total_quantity": stocks_qs.aggregate(total=Sum("quantity"))["total"] or 0,
+        "total_reserved_quantity": stocks_qs.aggregate(total=Sum("reserved_quantity"))["total"] or 0,
+        "lots_total": lots_qs.count(),
+        "lots_expiring_soon": lots_qs.filter(
+            expiration_date__isnull=False,
+            expiration_date__gte=today,
+            expiration_date__lte=expiring_limit,
+        ).count(),
+        "lots_expired": lots_qs.filter(
+            expiration_date__isnull=False,
+            expiration_date__lt=today,
+        ).count(),
+    }
+
+    return api_response(
+        data=data,
+        message="Dashboard de inventario obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_purchasing(request):
+    user = request.user
+
+    supply_qs = SupplyRequest.objects.select_related("branch").all()
+    supply_qs = apply_branch_scope(supply_qs, user, branch_field="branch")
+
+    po_qs = PurchaseOrder.objects.select_related("branch", "supplier").all()
+    po_qs = apply_branch_scope(po_qs, user, branch_field="branch")
+
+    receipt_qs = PurchaseReceipt.objects.select_related("branch").all()
+    receipt_qs = apply_branch_scope(receipt_qs, user, branch_field="branch")
+
+    data = {
+        "supply_requests_by_status": list(
+            supply_qs.values("status").annotate(total=Count("id")).order_by("status")
+        ),
+        "purchase_orders_by_status": list(
+            po_qs.values("status").annotate(total=Count("id")).order_by("status")
+        ),
+        "purchase_receipts_by_status": list(
+            receipt_qs.values("status").annotate(total=Count("id")).order_by("status")
+        ),
+        "purchase_orders_total_amount": po_qs.aggregate(
+            total=Sum("total_amount")
+        )["total"] or 0,
+    }
+
+    return api_response(
+        data=data,
+        message="Dashboard de compras obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_finance(request):
+    user = request.user
+
+    invoices_qs = SupplierInvoice.objects.select_related("legal_entity").all()
+    invoices_qs = apply_legal_entity_scope(
+        invoices_qs,
+        user,
+        legal_entity_field="legal_entity",
+    )
+
+    payments_qs = Payment.objects.select_related("legal_entity").all()
+    payments_qs = apply_legal_entity_scope(
+        payments_qs,
+        user,
+        legal_entity_field="legal_entity",
+    )
+
+    budgets_qs = Budget.objects.select_related("legal_entity").all()
+    budgets_qs = apply_legal_entity_scope(
+        budgets_qs,
+        user,
+        legal_entity_field="legal_entity",
+    )
+
+    data = {
+        "invoices_by_status": list(
+            invoices_qs.values("status").annotate(total=Count("id")).order_by("status")
+        ),
+        "payments_by_status": list(
+            payments_qs.values("status").annotate(total=Count("id")).order_by("status")
+        ),
+        "total_invoiced_amount": invoices_qs.aggregate(
+            total=Sum("total_amount")
+        )["total"] or 0,
+        "total_paid_amount": payments_qs.aggregate(
+            total=Sum("amount")
+        )["total"] or 0,
+        "budget_amount_total": budgets_qs.aggregate(
+            total=Sum("budget_amount")
+        )["total"] or 0,
+        "budget_consumed_total": budgets_qs.aggregate(
+            total=Sum("consumed_amount")
+        )["total"] or 0,
+    }
+
+    return api_response(
+        data=data,
+        message="Dashboard financiero obtenido correctamente.",
+    )

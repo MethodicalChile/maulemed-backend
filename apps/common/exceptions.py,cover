@@ -1,0 +1,27 @@
+> import logging
+  
+> from rest_framework.views import exception_handler
+  
+  
+> logger = logging.getLogger(__name__)
+  
+  
+> def custom_exception_handler(exc, context):
+>     response = exception_handler(exc, context)
+  
+>     view = context.get("view")
+>     request = context.get("request")
+  
+>     view_name = view.__class__.__name__ if view else "UnknownView"
+>     path = request.path if request else "UnknownPath"
+  
+>     logger.exception(f"Error en {view_name} path={path}: {exc}")
+  
+>     if response is not None:
+>         response.data = {
+>             "data": response.data,
+>             "status": "error",
+>             "message": "Ocurrió un error al procesar la solicitud.",
+>         }
+  
+>     return response

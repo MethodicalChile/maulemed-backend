@@ -1,0 +1,31 @@
+> from django.contrib import admin
+> from .models import Supplier, SupplierProduct, SupplierProductPrice
+  
+  
+> @admin.register(Supplier)
+> class SupplierAdmin(admin.ModelAdmin):
+>     list_display = ("name", "rut", "contact_name", "email", "phone", "delivery_days", "is_active")
+>     search_fields = ("name", "rut", "contact_name", "email")
+>     list_filter = ("is_active",)
+  
+  
+> @admin.register(SupplierProduct)
+> class SupplierProductAdmin(admin.ModelAdmin):
+>     list_display = (
+>         "supplier",
+>         "product",
+>         "last_price",
+>         "currency",
+>         "requires_purchase_order",
+>         "allows_credit",
+>         "is_active",
+>     )
+>     search_fields = ("supplier__name", "product__name", "supplier_sku")
+>     list_filter = ("supplier", "requires_purchase_order", "allows_credit", "is_active")
+  
+  
+> @admin.register(SupplierProductPrice)
+> class SupplierProductPriceAdmin(admin.ModelAdmin):
+>     list_display = ("supplier_product", "price", "currency", "valid_from", "valid_to", "created_at")
+>     search_fields = ("supplier_product__supplier__name", "supplier_product__product__name")
+>     list_filter = ("currency", "valid_from")

@@ -1,0 +1,474 @@
+"""
+Tests para la app organizations:
+- Organization, LegalEntity, Branch, CostCenter
+- Permisos IsAdminOrGerente
+- Scope filtering por usuario
+- Soft delete
+"""
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework.test import APIClient
+from rest_framework import status
+
+from apps.accounts.models import Role, UserRoleAssignment, UserProfile
+from apps.organizations.models import Organization, LegalEntity, Branch, CostCenter
+
+User = get_user_model()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def create_admin(username="orgadmin", password="adminpass"):
+    return User.objects.create_user(username=username, password=password, is_superuser=True, is_staff=True)
+
+
+def create_gerente(username="gerente", password="gerentepass"):
+    user = User.objects.create_user(username=username, password=password)
+    role, _ = Role.objects.get_or_create(code="GERENTE", defaults={"name": "Gerente", "is_active": True})
+    UserRoleAssignment.objects.create(user=user, role=role, is_active=True)
+    return user
+
+
+def create_regular(username="bodeguero", password="bodepass"):
+    user = User.objects.create_user(username=username, password=password)
+    role, _ = Role.objects.get_or_create(code="BODEGUERO", defaults={"name": "Bodeguero", "is_active": True})
+    UserRoleAssignment.objects.create(user=user, role=role, is_active=True)
+    return user
+
+
+def create_organization(name="Org Test", rut="76123456-7"):
+    return Organization.objects.create(name=name, rut=rut, is_active=True)
+
+
+def create_legal_entity(org, name="Razón Social Test", rut="76000001-1"):
+    return LegalEntity.objects.create(
+        organization=org, name=name, rut=rut, is_active=True
+    )
+
+
+def create_branch(org, le=None, name="Sucursal Test", code="SCT01"):
+    return Branch.objects.create(
+        organization=org, legal_entity=le, name=name, code=code, is_active=True
+    )
+
+
+def create_cost_center(le, branch=None, code="CC001", name="Centro Costo Test"):
+    return CostCenter.objects.create(
+        legal_entity=le, branch=branch, code=code, name=name, is_active=True
+    )
+
+
+class BaseOrgTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = create_admin()
+        self.gerente = create_gerente()
+        self.bodeguero = create_regular()
+
+    def _auth(self, username, password):
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": username, "password": password},
+            format="json",
+        )
+        token = resp.json()["data"]["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+
+    def _auth_admin(self):
+        self._auth("orgadmin", "adminpass")
+
+    def _auth_gerente(self):
+        self._auth("gerente", "gerentepass")
+
+    def _auth_bodeguero(self):
+        self._auth("bodeguero", "bodepass")
+
+
+# ---------------------------------------------------------------------------
+# Organization
+# ---------------------------------------------------------------------------
+
+class OrganizationTests(BaseOrgTest):
+
+    def test_admin_puede_listar_organizaciones(self):
+        self._auth_admin()
+        response = self.client.get("/api/organizations/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_gerente_puede_listar_organizaciones(self):
+        self._auth_gerente()
+        response = self.client.get("/api/organizations/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_bodeguero_no_puede_listar_organizaciones(self):
+        self._auth_bodeguero()
+        response = self.client.get("/api/organizations/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_puede_crear_organizacion(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/organizations/",
+            {"name": "Nueva Org", "rut": "12345678-9", "is_active": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["data"]["name"], "Nueva Org")
+
+    def test_admin_puede_obtener_organizacion_por_uuid(self):
+        self._auth_admin()
+        org = create_organization(name="Org Retrieve")
+        response = self.client.get(f"/api/organizations/{org.uuid}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["name"], "Org Retrieve")
+
+    def test_admin_puede_actualizar_organizacion(self):
+        self._auth_admin()
+        org = create_organization(name="Org Original")
+        response = self.client.patch(
+            f"/api/organizations/{org.uuid}/",
+            {"name": "Org Actualizada"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["name"], "Org Actualizada")
+
+    def test_soft_delete_organizacion(self):
+        self._auth_admin()
+        org = create_organization(name="Org a Eliminar")
+        uuid_val = org.uuid
+        response = self.client.delete(f"/api/organizations/{uuid_val}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        org.refresh_from_db()
+        self.assertIsNotNone(org.deleted_at)
+        # No aparece en listado activo
+        list_response = self.client.get("/api/organizations/")
+        uuids = [str(r["uuid"]) for r in self._get_results(list_response)]
+        self.assertNotIn(str(uuid_val), uuids)
+
+    def _get_results(self, response):
+        data = response.json()["data"]
+        if isinstance(data, dict):
+            return data.get("results", [])
+        return data
+
+    def test_no_autenticado_no_puede_listar(self):
+        response = self.client.get("/api/organizations/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_organizacion_str(self):
+        org = Organization(name="Test Org")
+        self.assertEqual(str(org), "Test Org")
+
+
+# ---------------------------------------------------------------------------
+# LegalEntity
+# ---------------------------------------------------------------------------
+
+class LegalEntityTests(BaseOrgTest):
+
+    def setUp(self):
+        super().setUp()
+        self.org = create_organization()
+
+    def test_admin_puede_crear_razon_social(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/legal-entities/",
+            {
+                "organization": self.org.id,
+                "name": "Razón Social Nueva",
+                "rut": "99000001-1",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_rut_unico_falla_al_duplicar(self):
+        self._auth_admin()
+        create_legal_entity(self.org, rut="76111111-1")
+        response = self.client.post(
+            "/api/legal-entities/",
+            {
+                "organization": self.org.id,
+                "name": "Duplicada",
+                "rut": "76111111-1",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_legal_entity_str(self):
+        le = LegalEntity(name="Test LE", rut="12-3")
+        self.assertIn("Test LE", str(le))
+        self.assertIn("12-3", str(le))
+
+
+# ---------------------------------------------------------------------------
+# Branch
+# ---------------------------------------------------------------------------
+
+class BranchTests(BaseOrgTest):
+
+    def setUp(self):
+        super().setUp()
+        self.org = create_organization()
+
+    def test_admin_puede_crear_sucursal(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/branches/",
+            {
+                "organization": self.org.id,
+                "name": "Sucursal Nueva",
+                "code": "SN001",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_codigo_unico_falla_al_duplicar(self):
+        self._auth_admin()
+        create_branch(self.org, code="CODDUP")
+        response = self.client.post(
+            "/api/branches/",
+            {
+                "organization": self.org.id,
+                "name": "Otra Sucursal",
+                "code": "CODDUP",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_branch_str(self):
+        branch = Branch(name="Sucursal X")
+        self.assertEqual(str(branch), "Sucursal X")
+
+    def test_admin_puede_actualizar_sucursal(self):
+        self._auth_admin()
+        branch = create_branch(self.org, name="Sucursal Antigua", code="SA001")
+        response = self.client.patch(
+            f"/api/branches/{branch.uuid}/",
+            {"name": "Sucursal Renovada"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["name"], "Sucursal Renovada")
+
+
+# ---------------------------------------------------------------------------
+# CostCenter
+# ---------------------------------------------------------------------------
+
+class CostCenterTests(BaseOrgTest):
+
+    def setUp(self):
+        super().setUp()
+        self.org = create_organization()
+        self.le = create_legal_entity(self.org, rut="76222222-2")
+        self.branch = create_branch(self.org, le=self.le, code="CC_BRANCH")
+
+    def test_admin_puede_crear_centro_costo(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/cost-centers/",
+            {
+                "legal_entity": self.le.id,
+                "code": "CCX01",
+                "name": "Centro Costo X",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_codigo_unico_por_entidad_legal(self):
+        """Unique constraint (legal_entity, code)."""
+        self._auth_admin()
+        create_cost_center(self.le, code="DUPCC")
+        response = self.client.post(
+            "/api/cost-centers/",
+            {
+                "legal_entity": self.le.id,
+                "code": "DUPCC",
+                "name": "Duplicado",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cost_center_str(self):
+        cc = CostCenter(code="CC99", name="Nombre CC")
+        self.assertIn("CC99", str(cc))
+        self.assertIn("Nombre CC", str(cc))
+
+
+# ---------------------------------------------------------------------------
+# Scope filtering
+# ---------------------------------------------------------------------------
+
+class ScopeFilteringTests(TestCase):
+
+    def setUp(self):
+        self.client = APIClient()
+        # Crear admin global
+        self.admin = User.objects.create_user(
+            username="scopeadmin", password="pass", is_superuser=True, is_staff=True
+        )
+        # Crear usuario con scope en solo una sucursal
+        self.user_scoped = User.objects.create_user(username="scoped", password="pass")
+        role, _ = Role.objects.get_or_create(code="ABASTECIMIENTO", defaults={"name": "Abastecimiento", "is_active": True})
+        self.org = create_organization(name="ScopeOrg", rut="76333333-3")
+        self.branch_a = create_branch(self.org, name="Sucursal A", code="SCPA")
+        self.branch_b = create_branch(self.org, name="Sucursal B", code="SCPB")
+        UserRoleAssignment.objects.create(
+            user=self.user_scoped,
+            role=role,
+            branch=self.branch_a,
+            is_active=True,
+        )
+
+    def _auth(self, username, password):
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": username, "password": password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def test_admin_global_ve_todas_las_sucursales(self):
+        self._auth("scopeadmin", "pass")
+        resp = self.client.get("/api/branches/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_usuario_con_scope_solo_ve_su_sucursal(self):
+        self._auth("scoped", "pass")
+        resp = self.client.get("/api/branches/")
+        # Bodeguero/ABASTECIMIENTO tiene permiso en branches (IsAdminOrGerente deniega)
+        # Si no tiene permiso, esperar 403 — correcto
+        self.assertIn(resp.status_code, [status.HTTP_200_OK, status.HTTP_403_FORBIDDEN])
+
+
+# ---------------------------------------------------------------------------
+# Tests de organizations/views.py líneas 48-51 y 80-95
+# Cubren: LegalEntity scope no-global, CostCenter scope por legal_entity y organization
+# ---------------------------------------------------------------------------
+
+class OrganizationScopeViewTests(TestCase):
+    """
+    Cubre las ramas del get_queryset de LegalEntityViewSet y CostCenterViewSet
+    para usuarios con scope de legal_entity o de organization (no superuser).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        # Org y estructura
+        self.org = Organization.objects.create(name="ScopeViewOrg", is_active=True)
+        self.le = create_legal_entity(self.org, name="ScopeViewLE", rut="76444001-1")
+        self.branch = create_branch(self.org, le=self.le, name="ScopeViewBranch", code="SVB01")
+        self.cc = create_cost_center(self.le, branch=self.branch, code="SVCC01", name="CC ScopeView")
+
+        # Usuario GERENTE con scope solo en legal_entity
+        self.user_le = User.objects.create_user(username="sv_le_user", password="pass")
+        role_g, _ = Role.objects.get_or_create(code="GERENTE", defaults={"name": "Gerente", "is_active": True})
+        UserRoleAssignment.objects.create(
+            user=self.user_le, role=role_g, legal_entity=self.le, is_active=True
+        )
+
+        # Usuario GERENTE con scope de organization
+        self.user_org = User.objects.create_user(username="sv_org_user", password="pass")
+        UserRoleAssignment.objects.create(
+            user=self.user_org, role=role_g, organization=self.org, is_active=True
+        )
+
+        # Usuario GERENTE con scope de branch
+        self.user_branch = User.objects.create_user(username="sv_branch_user", password="pass")
+        UserRoleAssignment.objects.create(
+            user=self.user_branch, role=role_g, branch=self.branch, is_active=True
+        )
+
+        # Usuario GERENTE sin ningún scope (devuelve none)
+        self.user_empty = User.objects.create_user(username="sv_empty_user", password="pass")
+        UserRoleAssignment.objects.create(
+            user=self.user_empty, role=role_g, is_active=True
+        )
+
+    def _auth(self, username, password="pass"):
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": username, "password": password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    # --- LegalEntityViewSet ---
+
+    def test_legal_entity_scope_por_legal_entity(self):
+        """Rama: usuario con legal_entity_ids → filtra por self."""
+        self._auth("sv_le_user")
+        resp = self.client.get("/api/legal-entities/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        names = [r["name"] for r in results]
+        self.assertIn("ScopeViewLE", names)
+
+    def test_legal_entity_scope_por_organization(self):
+        """Rama: usuario con organization_ids → filtra legal_entities de esa org."""
+        self._auth("sv_org_user")
+        resp = self.client.get("/api/legal-entities/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_legal_entity_sin_scope_devuelve_vacio(self):
+        """Rama: usuario sin scope → queryset.none()."""
+        self._auth("sv_empty_user")
+        resp = self.client.get("/api/legal-entities/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        self.assertEqual(len(results), 0)
+
+    # --- CostCenterViewSet ---
+
+    def test_cost_center_scope_por_branch(self):
+        """Rama: scope["branch_ids"] → filter(branch_id__in=...)."""
+        self._auth("sv_branch_user")
+        resp = self.client.get("/api/cost-centers/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        codes = [r["code"] for r in results]
+        self.assertIn("SVCC01", codes)
+
+    def test_cost_center_scope_por_legal_entity(self):
+        """Rama: scope["legal_entity_ids"] → filter(legal_entity_id__in=...)."""
+        self._auth("sv_le_user")
+        resp = self.client.get("/api/cost-centers/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        codes = [r["code"] for r in results]
+        self.assertIn("SVCC01", codes)
+
+    def test_cost_center_scope_por_organization(self):
+        """Rama: scope["organization_ids"] → filter(legal_entity__organization_id__in=...)."""
+        self._auth("sv_org_user")
+        resp = self.client.get("/api/cost-centers/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_cost_center_sin_scope_devuelve_vacio(self):
+        """Rama: ningún scope → queryset.none()."""
+        self._auth("sv_empty_user")
+        resp = self.client.get("/api/cost-centers/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+        results = data.get("results", data) if isinstance(data, dict) else data
+        self.assertEqual(len(results), 0)

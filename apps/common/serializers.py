@@ -1,0 +1,29 @@
+from rest_framework import serializers
+
+
+class UserSmallSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    email = serializers.EmailField(allow_blank=True, required=False)
+    first_name = serializers.CharField(allow_blank=True, required=False)
+    last_name = serializers.CharField(allow_blank=True, required=False)
+    full_name = serializers.SerializerMethodField()
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() if hasattr(obj, "get_full_name") else ""
+
+
+class UUIDNameSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    name = serializers.CharField()
+
+
+class UUIDCodeNameSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    code = serializers.CharField()
+    name = serializers.CharField()
+
+
+class UUIDLabelSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    label = serializers.CharField()

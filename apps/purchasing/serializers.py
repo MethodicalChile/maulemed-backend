@@ -1,0 +1,131 @@
+from rest_framework import serializers
+
+from apps.accounts.serializers import UserSerializer
+from apps.organizations.serializers import (
+    BranchSmallSerializer,
+    LegalEntitySmallSerializer,
+    CostCenterSmallSerializer,
+)
+from apps.products.serializers import ProductSmallSerializer
+from apps.suppliers.serializers import SupplierSmallSerializer
+from apps.inventory.serializers import WarehouseSmallSerializer
+
+from .models import (
+    SupplyRequest,
+    SupplyRequestItem,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseReceipt,
+    PurchaseReceiptItem,
+    SupplierClaim,
+)
+
+
+class SupplyRequestSmallSerializer(serializers.ModelSerializer):
+    branch_detail = BranchSmallSerializer(source="branch", read_only=True)
+
+    class Meta:
+        model = SupplyRequest
+        fields = ["uuid", "status", "period_year", "period_month", "branch_detail"]
+
+
+class PurchaseOrderSmallSerializer(serializers.ModelSerializer):
+    supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
+
+    class Meta:
+        model = PurchaseOrder
+        fields = ["uuid", "order_number", "status", "total_amount", "supplier_detail"]
+
+
+class PurchaseReceiptSmallSerializer(serializers.ModelSerializer):
+    purchase_order_detail = PurchaseOrderSmallSerializer(source="purchase_order", read_only=True)
+
+    class Meta:
+        model = PurchaseReceipt
+        fields = ["uuid", "status", "received_at", "purchase_order_detail"]
+
+
+class SupplyRequestItemSerializer(serializers.ModelSerializer):
+    product_detail = ProductSmallSerializer(source="product", read_only=True)
+
+    class Meta:
+        model = SupplyRequestItem
+        exclude = ["id", "deleted_at"]
+
+
+class SupplyRequestSerializer(serializers.ModelSerializer):
+    branch_detail = BranchSmallSerializer(source="branch", read_only=True)
+    legal_entity_detail = LegalEntitySmallSerializer(source="legal_entity", read_only=True)
+    cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
+
+    requested_by_detail = UserSerializer(source="requested_by", read_only=True)
+    reviewed_by_detail = UserSerializer(source="reviewed_by", read_only=True)
+    approved_by_detail = UserSerializer(source="approved_by", read_only=True)
+
+    items = SupplyRequestItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SupplyRequest
+        exclude = ["id", "deleted_at"]
+
+
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+    product_detail = ProductSmallSerializer(source="product", read_only=True)
+
+    pending_quantity = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=3,
+        read_only=True,
+    )
+
+    class Meta:
+        model = PurchaseOrderItem
+        exclude = ["id", "deleted_at"]
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
+    legal_entity_detail = LegalEntitySmallSerializer(source="legal_entity", read_only=True)
+    branch_detail = BranchSmallSerializer(source="branch", read_only=True)
+    cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
+    supply_request_detail = SupplyRequestSmallSerializer(source="supply_request", read_only=True)
+
+    requested_by_detail = UserSerializer(source="requested_by", read_only=True)
+    approved_by_detail = UserSerializer(source="approved_by", read_only=True)
+
+    items = PurchaseOrderItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PurchaseOrder
+        exclude = ["id", "deleted_at"]
+
+
+class PurchaseReceiptItemSerializer(serializers.ModelSerializer):
+    product_detail = ProductSmallSerializer(source="product", read_only=True)
+
+    class Meta:
+        model = PurchaseReceiptItem
+        exclude = ["id", "deleted_at"]
+
+
+class PurchaseReceiptSerializer(serializers.ModelSerializer):
+    purchase_order_detail = PurchaseOrderSmallSerializer(source="purchase_order", read_only=True)
+    branch_detail = BranchSmallSerializer(source="branch", read_only=True)
+    warehouse_detail = WarehouseSmallSerializer(source="warehouse", read_only=True)
+    received_by_detail = UserSerializer(source="received_by", read_only=True)
+
+    items = PurchaseReceiptItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PurchaseReceipt
+        exclude = ["id", "deleted_at"]
+
+
+class SupplierClaimSerializer(serializers.ModelSerializer):
+    purchase_receipt_detail = PurchaseReceiptSmallSerializer(source="purchase_receipt", read_only=True)
+    supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
+    created_by_detail = UserSerializer(source="created_by", read_only=True)
+
+    class Meta:
+        model = SupplierClaim
+        exclude = ["id", "deleted_at"]

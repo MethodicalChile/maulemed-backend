@@ -1,0 +1,35 @@
+> from apps.common.viewsets import BaseModelViewSet
+> from apps.common.permissions import CanManageDocuments
+  
+> from .models import Document
+> from .serializers import DocumentSerializer
+  
+  
+> class DocumentViewSet(BaseModelViewSet):
+>     queryset = Document.objects.all().order_by("-created_at")
+>     serializer_class = DocumentSerializer
+>     permission_classes = [CanManageDocuments]
+  
+>     filterset_fields = [
+>         "document_type",
+>         "related_app",
+>         "related_model",
+>         "related_uuid",
+>         "uploaded_by",
+>     ]
+>     search_fields = [
+>         "file_name",
+>         "related_app",
+>         "related_model",
+>         "notes",
+>     ]
+>     ordering_fields = [
+>         "document_type",
+>         "file_name",
+>         "created_at",
+>         "updated_at",
+>     ]
+>     ordering = ["-created_at"]
+  
+>     def perform_create(self, serializer):
+>         serializer.save(uploaded_by=self.request.user)

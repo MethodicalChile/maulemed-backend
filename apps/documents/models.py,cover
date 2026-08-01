@@ -1,0 +1,63 @@
+> from django.conf import settings
+> from django.db import models
+  
+> from apps.common.models import BaseModel
+  
+  
+> class Document(BaseModel):
+>     TYPE_PURCHASE_ORDER_PDF = "ORDEN_COMPRA_PDF"
+>     TYPE_INVOICE = "FACTURA"
+>     TYPE_DISPATCH_GUIDE = "GUIA_DESPACHO"
+>     TYPE_INTERNAL_GUIDE = "GUIA_INTERNA"
+>     TYPE_CREDIT_NOTE = "NOTA_CREDITO"
+>     TYPE_QUOTATION = "COTIZACION"
+>     TYPE_PAYMENT_RECEIPT = "COMPROBANTE_PAGO"
+>     TYPE_OTHER = "OTRO"
+  
+>     DOCUMENT_TYPE_CHOICES = [
+>         (TYPE_PURCHASE_ORDER_PDF, "Orden de compra PDF"),
+>         (TYPE_INVOICE, "Factura"),
+>         (TYPE_DISPATCH_GUIDE, "Guía de despacho"),
+>         (TYPE_INTERNAL_GUIDE, "Guía interna"),
+>         (TYPE_CREDIT_NOTE, "Nota de crédito"),
+>         (TYPE_QUOTATION, "Cotización"),
+>         (TYPE_PAYMENT_RECEIPT, "Comprobante de pago"),
+>         (TYPE_OTHER, "Otro"),
+>     ]
+  
+>     document_type = models.CharField(
+>         max_length=80,
+>         choices=DOCUMENT_TYPE_CHOICES,
+>     )
+  
+>     file_url = models.TextField(blank=True, null=True)
+>     file_name = models.CharField(max_length=255, blank=True, null=True)
+>     file_size = models.PositiveBigIntegerField(blank=True, null=True)
+>     mime_type = models.CharField(max_length=120, blank=True, null=True)
+  
+>     related_app = models.CharField(max_length=80, blank=True, null=True)
+>     related_model = models.CharField(max_length=80, blank=True, null=True)
+>     related_uuid = models.UUIDField(blank=True, null=True)
+  
+>     uploaded_by = models.ForeignKey(
+>         settings.AUTH_USER_MODEL,
+>         on_delete=models.SET_NULL,
+>         related_name="uploaded_documents",
+>         blank=True,
+>         null=True,
+>     )
+  
+>     notes = models.TextField(blank=True, null=True)
+  
+>     class Meta:
+>         db_table = "documents"
+>         verbose_name = "Document"
+>         verbose_name_plural = "Documents"
+>         indexes = [
+>             models.Index(fields=["document_type"], name="idx_doc_type"),
+>             models.Index(fields=["related_model", "related_uuid"], name="idx_doc_related"),
+>             models.Index(fields=["created_at"], name="idx_doc_created_at"),
+>         ]
+  
+>     def __str__(self):
+>         return self.file_name or str(self.uuid)

@@ -1,0 +1,95 @@
+> from apps.common.viewsets import BaseModelViewSet
+> from apps.common.permissions import IsAdminOrGerente
+> from apps.common.scopes import (
+>     user_is_global,
+>     get_user_scope_ids,
+>     apply_organization_scope,
+>     apply_legal_entity_scope,
+>     apply_branch_scope,
+> )
+  
+> from .models import Organization, LegalEntity, Branch, CostCenter
+> from .serializers import (
+>     OrganizationSerializer,
+>     LegalEntitySerializer,
+>     BranchSerializer,
+>     CostCenterSerializer,
+> )
+  
+  
+> class OrganizationViewSet(BaseModelViewSet):
+>     queryset = Organization.objects.all().order_by("name")
+>     serializer_class = OrganizationSerializer
+>     permission_classes = [IsAdminOrGerente]
+  
+>     filterset_fields = ["is_active"]
+>     search_fields = ["name", "rut"]
+>     ordering_fields = ["name", "created_at", "updated_at"]
+>     ordering = ["name"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         if user_is_global(self.request.user):
+>             return qs
+>         return apply_organization_scope(qs, self.request.user, organization_field="self")
+  
+  
+> class LegalEntityViewSet(BaseModelViewSet):
+>     queryset = LegalEntity.objects.select_related("organization").all().order_by("name")
+>     serializer_class = LegalEntitySerializer
+>     permission_classes = [IsAdminOrGerente]
+  
+>     filterset_fields = ["organization", "is_active"]
+>     search_fields = ["name", "rut", "business_activity"]
+>     ordering_fields = ["name", "rut", "created_at", "updated_at"]
+>     ordering = ["name"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         if user_is_global(self.request.user):
+!             return qs
+>         return apply_legal_entity_scope(qs, self.request.user, legal_entity_field="self")
+  
+  
+> class BranchViewSet(BaseModelViewSet):
+>     queryset = Branch.objects.select_related("organization", "legal_entity").all().order_by("name")
+>     serializer_class = BranchSerializer
+>     permission_classes = [IsAdminOrGerente]
+  
+>     filterset_fields = ["organization", "legal_entity", "city", "is_main_branch", "is_active"]
+>     search_fields = ["name", "code", "city", "address", "email"]
+>     ordering_fields = ["name", "city", "created_at", "updated_at"]
+>     ordering = ["name"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         return apply_branch_scope(qs, self.request.user, branch_field="self")
+  
+  
+> class CostCenterViewSet(BaseModelViewSet):
+>     queryset = CostCenter.objects.select_related("legal_entity", "branch").all().order_by("code")
+>     serializer_class = CostCenterSerializer
+>     permission_classes = [IsAdminOrGerente]
+  
+>     filterset_fields = ["legal_entity", "branch", "is_active"]
+>     search_fields = ["code", "name", "description"]
+>     ordering_fields = ["code", "name", "created_at", "updated_at"]
+>     ordering = ["code"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         scope = get_user_scope_ids(self.request.user)
+  
+>         if scope["is_global"]:
+!             return qs
+  
+>         if scope["branch_ids"]:
+>             return qs.filter(branch_id__in=scope["branch_ids"])
+  
+>         if scope["legal_entity_ids"]:
+>             return qs.filter(legal_entity_id__in=scope["legal_entity_ids"])
+  
+>         if scope["organization_ids"]:
+>             return qs.filter(legal_entity__organization_id__in=scope["organization_ids"])
+  
+>         return qs.none()

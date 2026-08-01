@@ -1,0 +1,53 @@
+from django.contrib import admin
+from .models import Warehouse, InventoryStock, InventoryLot, InventoryMovement
+
+
+@admin.register(Warehouse)
+class WarehouseAdmin(admin.ModelAdmin):
+    list_display = ("name", "branch", "warehouse_type", "is_active", "created_at")
+    search_fields = ("name", "branch__name")
+    list_filter = ("warehouse_type", "branch", "is_active")
+
+
+@admin.register(InventoryStock)
+class InventoryStockAdmin(admin.ModelAdmin):
+    list_display = (
+        "warehouse",
+        "product",
+        "quantity",
+        "reserved_quantity",
+        "available_quantity",
+        "last_count_date",
+        "updated_at",
+    )
+    search_fields = ("warehouse__name", "product__name", "product__internal_code")
+    list_filter = ("warehouse", "product__category")
+
+
+@admin.register(InventoryLot)
+class InventoryLotAdmin(admin.ModelAdmin):
+    list_display = (
+        "product",
+        "warehouse",
+        "lot_number",
+        "expiration_date",
+        "quantity",
+        "status",
+        "supplier",
+    )
+    search_fields = ("product__name", "lot_number", "supplier__name")
+    list_filter = ("status", "warehouse", "expiration_date", "supplier")
+
+
+@admin.register(InventoryMovement)
+class InventoryMovementAdmin(admin.ModelAdmin):
+    list_display = (
+        "movement_type",
+        "product",
+        "quantity",
+        "warehouse_origin",
+        "warehouse_destination",
+        "created_at",
+    )
+    search_fields = ("product__name", "reason", "reference_type")
+    list_filter = ("movement_type", "warehouse_origin", "warehouse_destination", "created_at")

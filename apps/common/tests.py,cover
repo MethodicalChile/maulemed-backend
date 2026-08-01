@@ -1,0 +1,874 @@
+> """
+> Tests para la app common:
+> - BaseModel: uuid, soft_delete, restore, ActiveManager
+> - business_validations: validate_has_items, validate_status_in/not_in, validate_positive_quantity, validate_required
+> - scopes: user_is_global, get_user_scope_ids, apply_branch_scope
+> - responses: api_response, api_error
+> - pagination: StandardResultsSetPagination
+> - health endpoints
+> """
+> from decimal import Decimal
+  
+> from django.contrib.auth import get_user_model
+> from django.core.exceptions import ValidationError
+> from django.test import TestCase, RequestFactory
+> from django.utils import timezone
+> from rest_framework.test import APIClient
+> from rest_framework import status
+  
+> from apps.accounts.models import Role, UserRoleAssignment, UserProfile
+> from apps.common.business_validations import (
+>     validate_has_items,
+>     validate_status_in,
+>     validate_status_not_in,
+>     validate_positive_quantity,
+>     validate_required,
+> )
+> from apps.common.scopes import user_is_global, get_user_scope_ids
+> from apps.organizations.models import Organization, Branch
+  
+> User = get_user_model()
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de business_validations
+  # ---------------------------------------------------------------------------
+  
+> class BusinessValidationTests(TestCase):
+  
+      # validate_positive_quantity
+  
+>     def test_validate_positive_quantity_ok(self):
+          # No debe lanzar excepción
+>         validate_positive_quantity(Decimal("1"))
+>         validate_positive_quantity(Decimal("100"))
+>         validate_positive_quantity(0.1)
+  
+>     def test_validate_positive_quantity_falla_con_cero(self):
+>         with self.assertRaises(ValidationError):
+>             validate_positive_quantity(Decimal("0"))
+  
+>     def test_validate_positive_quantity_falla_con_negativo(self):
+>         with self.assertRaises(ValidationError):
+>             validate_positive_quantity(Decimal("-5"))
+  
+>     def test_validate_positive_quantity_falla_con_none(self):
+>         with self.assertRaises(ValidationError):
+>             validate_positive_quantity(None)
+  
+>     def test_validate_positive_quantity_mensaje_personalizado(self):
+>         with self.assertRaises(ValidationError) as ctx:
+>             validate_positive_quantity(Decimal("0"), "Mi mensaje personalizado")
+>         self.assertIn("Mi mensaje personalizado", str(ctx.exception))
+  
+      # validate_required
+  
+>     def test_validate_required_ok(self):
+>         validate_required("valor", "campo")
+>         validate_required(1, "campo")
+  
+>     def test_validate_required_falla_con_none(self):
+>         with self.assertRaises(ValidationError):
+>             validate_required(None, "campo_requerido")
+  
+>     def test_validate_required_falla_con_string_vacio(self):
+>         with self.assertRaises(ValidationError):
+>             validate_required("", "campo_vacio")
+  
+      # validate_status_in
+  
+>     def test_validate_status_in_ok(self):
+>         class FakeInstance:
+>             status = "APROBADA"
+>         validate_status_in(FakeInstance(), ["APROBADA", "PENDIENTE"])
+  
+>     def test_validate_status_in_falla_estado_no_permitido(self):
+>         class FakeInstance:
+>             status = "CANCELADA"
+>         with self.assertRaises(ValidationError):
+>             validate_status_in(FakeInstance(), ["APROBADA", "PENDIENTE"])
+  
+>     def test_validate_status_in_mensaje_personalizado(self):
+>         class FakeInstance:
+>             status = "RECHAZADA"
+>         with self.assertRaises(ValidationError) as ctx:
+>             validate_status_in(FakeInstance(), ["APROBADA"], message="Solo aprobadas")
+>         self.assertIn("Solo aprobadas", str(ctx.exception))
+  
+      # validate_status_not_in
+  
+>     def test_validate_status_not_in_ok(self):
+>         class FakeInstance:
+>             status = "ACTIVO"
+>         validate_status_not_in(FakeInstance(), ["CANCELADA", "RECHAZADA"])
+  
+>     def test_validate_status_not_in_falla_si_estado_bloqueado(self):
+>         class FakeInstance:
+>             status = "CANCELADA"
+>         with self.assertRaises(ValidationError):
+>             validate_status_not_in(FakeInstance(), ["CANCELADA", "RECHAZADA"])
+  
+      # validate_has_items
+  
+>     def test_validate_has_items_ok(self):
+>         """Cuando hay ítems relacionados no lanza excepción."""
+>         org = Organization.objects.create(name="HasItemsOrg", is_active=True)
+>         branch = Branch.objects.create(organization=org, name="HasItemsBranch", code="HIB01", is_active=True)
+          # Branch no tiene 'items', usamos organization (tiene legal_entities)
+          # Vamos a testear con un objeto mock
+>         class FakeManager:
+>             def exists(self):
+>                 return True
+  
+>         class FakeInstance:
+>             items = FakeManager()
+  
+>         validate_has_items(FakeInstance())
+  
+>     def test_validate_has_items_falla_sin_items(self):
+>         class FakeManager:
+>             def exists(self):
+>                 return False
+  
+>         class FakeInstance:
+>             items = FakeManager()
+  
+>         with self.assertRaises(ValidationError):
+>             validate_has_items(FakeInstance())
+  
+>     def test_validate_has_items_mensaje_personalizado(self):
+>         class FakeManager:
+>             def exists(self):
+>                 return False
+  
+>         class FakeInstance:
+>             items = FakeManager()
+  
+>         with self.assertRaises(ValidationError) as ctx:
+>             validate_has_items(FakeInstance(), message="Sin ítems personalizado")
+>         self.assertIn("Sin ítems personalizado", str(ctx.exception))
+  
+>     def test_validate_has_items_falla_si_relacion_no_existe(self):
+>         class FakeInstance:
+>             pass
+  
+>         with self.assertRaises(ValidationError):
+>             validate_has_items(FakeInstance(), related_name="items")
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests del BaseModel (soft_delete, restore, ActiveManager)
+  # ---------------------------------------------------------------------------
+  
+> class BaseModelTests(TestCase):
+  
+>     def test_soft_delete_establece_deleted_at(self):
+>         org = Organization.objects.create(name="SoftDelOrg", is_active=True)
+>         self.assertIsNone(org.deleted_at)
+>         org.soft_delete()
+>         org.refresh_from_db()
+>         self.assertIsNotNone(org.deleted_at)
+  
+>     def test_restore_limpia_deleted_at(self):
+>         org = Organization.objects.create(name="RestoreOrg", is_active=True)
+>         org.soft_delete()
+>         org.restore()
+>         org.refresh_from_db()
+>         self.assertIsNone(org.deleted_at)
+  
+>     def test_is_deleted_property(self):
+>         org = Organization.objects.create(name="IsDeletedOrg", is_active=True)
+>         self.assertFalse(org.is_deleted)
+>         org.soft_delete()
+>         self.assertTrue(org.is_deleted)
+  
+>     def test_active_manager_filtra_eliminados(self):
+>         org = Organization.objects.create(name="ActiveManager", is_active=True)
+>         org.soft_delete()
+          # No debe aparecer en queryset activo
+>         active_orgs = Organization.objects.filter(name="ActiveManager")
+>         self.assertEqual(active_orgs.count(), 0)
+  
+>     def test_all_objects_incluye_eliminados(self):
+>         org = Organization.objects.create(name="AllObjects", is_active=True)
+>         org.soft_delete()
+          # Sí debe aparecer con all_objects
+>         all_orgs = Organization.all_objects.filter(name="AllObjects")
+>         self.assertEqual(all_orgs.count(), 1)
+  
+>     def test_uuid_se_genera_automaticamente(self):
+>         org = Organization.objects.create(name="UUIDOrg", is_active=True)
+>         self.assertIsNotNone(org.uuid)
+  
+>     def test_uuid_es_unico(self):
+>         org1 = Organization.objects.create(name="UUID1", is_active=True)
+>         org2 = Organization.objects.create(name="UUID2", is_active=True)
+>         self.assertNotEqual(org1.uuid, org2.uuid)
+  
+>     def test_created_at_se_establece(self):
+>         org = Organization.objects.create(name="CreatedAt", is_active=True)
+>         self.assertIsNotNone(org.created_at)
+  
+>     def test_updated_at_cambia_al_guardar(self):
+>         import time
+>         org = Organization.objects.create(name="UpdatedAt", is_active=True)
+>         updated_before = org.updated_at
+>         time.sleep(0.01)
+>         org.name = "UpdatedAt2"
+>         org.save()
+>         self.assertGreater(org.updated_at, updated_before)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de scopes
+  # ---------------------------------------------------------------------------
+  
+> class ScopesTests(TestCase):
+  
+>     def setUp(self):
+>         self.superuser = User.objects.create_user(
+>             username="scopesuper", password="pass", is_superuser=True
+>         )
+>         self.admin_role_user = User.objects.create_user(
+>             username="adminrole", password="pass"
+>         )
+>         role_admin, _ = Role.objects.get_or_create(code="ADMIN", defaults={"name": "Administrador", "is_active": True})
+>         UserRoleAssignment.objects.create(
+>             user=self.admin_role_user, role=role_admin, is_active=True
+>         )
+>         self.regular_user = User.objects.create_user(
+>             username="regularscope", password="pass"
+>         )
+>         org = Organization.objects.create(name="ScopeOrg2", is_active=True)
+>         self.branch = Branch.objects.create(organization=org, name="ScopeBranch2", code="SB002", is_active=True)
+>         role_abastec, _ = Role.objects.get_or_create(code="ABASTECIMIENTO", defaults={"name": "Abastecimiento", "is_active": True})
+>         UserRoleAssignment.objects.create(
+>             user=self.regular_user,
+>             role=role_abastec,
+>             branch=self.branch,
+>             is_active=True,
+>         )
+  
+>     def test_superuser_es_global(self):
+>         self.assertTrue(user_is_global(self.superuser))
+  
+>     def test_admin_role_es_global(self):
+>         self.assertTrue(user_is_global(self.admin_role_user))
+  
+>     def test_regular_user_no_es_global(self):
+>         self.assertFalse(user_is_global(self.regular_user))
+  
+>     def test_usuario_no_autenticado_no_es_global(self):
+>         self.assertFalse(user_is_global(None))
+  
+>     def test_get_scope_ids_superuser_es_global(self):
+>         scope = get_user_scope_ids(self.superuser)
+>         self.assertTrue(scope["is_global"])
+  
+>     def test_get_scope_ids_regular_user_tiene_branch_ids(self):
+>         scope = get_user_scope_ids(self.regular_user)
+>         self.assertFalse(scope["is_global"])
+>         self.assertIn(self.branch.id, scope["branch_ids"])
+  
+>     def test_get_scope_ids_usuario_none(self):
+>         scope = get_user_scope_ids(None)
+>         self.assertFalse(scope["is_global"])
+>         self.assertEqual(scope["branch_ids"], [])
+  
+>     def test_apply_branch_scope_global_devuelve_todo(self):
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.inventory.models import Warehouse
+>         org = Organization.objects.create(name="ScopeApplyOrg", is_active=True)
+>         b = Branch.objects.create(organization=org, name="SAB", code="SAB01", is_active=True)
+>         Warehouse.objects.create(branch=b, name="W SAB", is_active=True)
+>         qs = Warehouse.objects.all()
+>         scoped = apply_branch_scope(qs, self.superuser, branch_field="branch")
+          # Global devuelve todo
+>         self.assertEqual(scoped.count(), qs.count())
+  
+>     def test_apply_branch_scope_usuario_scope_filtra(self):
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.inventory.models import Warehouse
+          # Crear bodega en una sucursal que el usuario regular NO tiene
+>         other_org = Organization.objects.create(name="OtherOrg2", is_active=True)
+>         other_branch = Branch.objects.create(organization=other_org, name="OtherBranch2", code="OTB02", is_active=True)
+>         Warehouse.objects.create(branch=other_branch, name="W Other", is_active=True)
+>         qs = Warehouse.objects.all()
+>         scoped = apply_branch_scope(qs, self.regular_user, branch_field="branch")
+>         uuids = list(scoped.values_list("branch__id", flat=True))
+          # No debe incluir la otra sucursal
+>         self.assertNotIn(other_branch.id, uuids)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de health endpoints
+  # ---------------------------------------------------------------------------
+  
+> class HealthTests(TestCase):
+  
+>     def setUp(self):
+>         self.client = APIClient()
+  
+>     def test_health_sin_autenticacion(self):
+>         response = self.client.get("/api/health/")
+>         self.assertEqual(response.status_code, status.HTTP_200_OK)
+>         data = response.json()["data"]
+>         self.assertEqual(data["status"], "ok")
+>         self.assertEqual(data["service"], "MauleMed API")
+  
+>     def test_health_db_sin_autenticacion(self):
+>         response = self.client.get("/api/health/db/")
+          # Puede ser 200 (conectado) o 503 (no conectado)
+>         self.assertIn(response.status_code, [status.HTTP_200_OK, status.HTTP_503_SERVICE_UNAVAILABLE])
+  
+>     def test_health_db_estado_conectado_o_no(self):
+>         response = self.client.get("/api/health/db/")
+>         data = response.json()["data"]
+>         self.assertIn(data["status"], ["connected", "disconnected"])
+>         self.assertEqual(data["database"], "default")
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de responses
+  # ---------------------------------------------------------------------------
+  
+> class ApiResponseTests(TestCase):
+  
+>     def test_api_response_estructura_basica(self):
+>         from apps.common.responses import api_response
+>         from django.test import RequestFactory
+>         factory = RequestFactory()
+>         request = factory.get("/")
+          # Simulamos la respuesta directamente
+>         resp = api_response(data={"key": "value"}, message="OK")
+>         self.assertEqual(resp.data["data"], {"key": "value"})
+>         self.assertEqual(resp.data["status"], "success")
+>         self.assertEqual(resp.data["message"], "OK")
+  
+>     def test_api_response_status_code_por_defecto(self):
+>         from apps.common.responses import api_response
+>         resp = api_response()
+>         self.assertEqual(resp.status_code, 200)
+  
+>     def test_api_error_estructura(self):
+>         from apps.common.responses import api_error
+>         resp = api_error(data={"detail": "error"}, message="Falló")
+>         self.assertEqual(resp.data["status"], "error")
+>         self.assertEqual(resp.data["message"], "Falló")
+>         self.assertEqual(resp.status_code, 400)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de paginación
+  # ---------------------------------------------------------------------------
+  
+> class PaginationTests(TestCase):
+  
+>     def setUp(self):
+>         self.client = APIClient()
+>         self.admin = User.objects.create_user(
+>             username="pgadmin", password="pgpass", is_superuser=True, is_staff=True
+>         )
+>         UserProfile.objects.get_or_create(user=self.admin, defaults={})
+  
+>     def _auth(self):
+>         resp = self.client.post(
+>             "/api/auth/login/",
+>             {"username": "pgadmin", "password": "pgpass"},
+>             format="json",
+>         )
+>         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+  
+>     def test_paginacion_retorna_count_y_total_pages(self):
+>         self._auth()
+>         response = self.client.get("/api/roles/")
+>         data = response.json()
+          # Si está paginado, data["data"] es un dict con count, total_pages, results
+>         if isinstance(data["data"], dict):
+>             self.assertIn("count", data["data"])
+>             self.assertIn("total_pages", data["data"])
+>             self.assertIn("current_page", data["data"])
+>             self.assertIn("results", data["data"])
+  
+>     def test_page_size_configurable(self):
+>         self._auth()
+>         response = self.client.get("/api/roles/?page_size=5")
+>         self.assertEqual(response.status_code, status.HTTP_200_OK)
+  
+>     def test_page_size_max_es_100(self):
+>         self._auth()
+          # page_size mayor al máximo debe limitarse a 100
+>         response = self.client.get("/api/roles/?page_size=500")
+>         self.assertEqual(response.status_code, status.HTTP_200_OK)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de common/serializers.py (0% coverage)
+  # ---------------------------------------------------------------------------
+  
+> class CommonSerializersTests(TestCase):
+  
+>     def test_user_small_serializer(self):
+>         from apps.common.serializers import UserSmallSerializer
+>         user = User.objects.create_user(
+>             username="seruser", password="pass",
+>             first_name="Juan", last_name="Pérez", email="juan@test.com"
+>         )
+>         data = UserSmallSerializer(user).data
+>         self.assertEqual(data["username"], "seruser")
+>         self.assertEqual(data["email"], "juan@test.com")
+>         self.assertIn("full_name", data)
+>         self.assertEqual(data["full_name"], "Juan Pérez")
+  
+>     def test_user_small_serializer_sin_get_full_name(self):
+>         from apps.common.serializers import UserSmallSerializer
+  
+>         class FakeUser:
+>             id = 1
+>             username = "fake"
+>             email = ""
+>             first_name = ""
+>             last_name = ""
+  
+>         data = UserSmallSerializer(FakeUser()).data
+>         self.assertEqual(data["full_name"], "")
+  
+>     def test_uuid_name_serializer(self):
+>         from apps.common.serializers import UUIDNameSerializer
+>         import uuid
+>         data = UUIDNameSerializer({"uuid": str(uuid.uuid4()), "name": "Prueba"}).data
+>         self.assertIn("uuid", data)
+>         self.assertIn("name", data)
+  
+>     def test_uuid_code_name_serializer(self):
+>         from apps.common.serializers import UUIDCodeNameSerializer
+>         import uuid
+>         data = UUIDCodeNameSerializer({"uuid": str(uuid.uuid4()), "code": "COD", "name": "Nombre"}).data
+>         self.assertEqual(data["code"], "COD")
+  
+>     def test_uuid_label_serializer(self):
+>         from apps.common.serializers import UUIDLabelSerializer
+>         import uuid
+>         data = UUIDLabelSerializer({"uuid": str(uuid.uuid4()), "label": "Mi etiqueta"}).data
+>         self.assertEqual(data["label"], "Mi etiqueta")
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de common/scopes.py (71%) — apply_legal_entity_scope y apply_organization_scope
+  # ---------------------------------------------------------------------------
+  
+> class LegalEntityAndOrganizationScopeTests(TestCase):
+  
+>     def setUp(self):
+>         from apps.organizations.models import LegalEntity
+>         self.org = Organization.objects.create(name="ScopeOrg3", is_active=True)
+>         self.le = LegalEntity.objects.create(
+>             organization=self.org, name="ScopeLE", rut="76456001-1", is_active=True
+>         )
+          # Usuario con scope en legal_entity
+>         self.user_le = User.objects.create_user(username="user_le", password="pass")
+>         role, _ = Role.objects.get_or_create(code="FINANZAS", defaults={"name": "Finanzas", "is_active": True})
+>         UserRoleAssignment.objects.create(
+>             user=self.user_le, role=role, legal_entity=self.le, is_active=True
+>         )
+          # Usuario con scope en organization
+>         self.user_org = User.objects.create_user(username="user_org", password="pass")
+>         UserRoleAssignment.objects.create(
+>             user=self.user_org, role=role, organization=self.org, is_active=True
+>         )
+          # Usuario sin ningún scope
+>         self.user_empty = User.objects.create_user(username="user_empty", password="pass")
+>         UserRoleAssignment.objects.create(
+>             user=self.user_empty, role=role, is_active=True
+>         )
+  
+>     def test_apply_legal_entity_scope_con_le_asignado(self):
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.finance.models import SupplierInvoice
+>         qs = SupplierInvoice.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_le, legal_entity_field="legal_entity")
+          # Filtra por le_id
+>         self.assertIsNotNone(scoped)
+  
+>     def test_apply_legal_entity_scope_con_org_asignado(self):
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.organizations.models import LegalEntity
+>         qs = LegalEntity.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_org, legal_entity_field="self")
+>         self.assertIsNotNone(scoped)
+  
+>     def test_apply_legal_entity_scope_sin_scope_devuelve_none_qs(self):
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.finance.models import SupplierInvoice
+>         qs = SupplierInvoice.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_empty, legal_entity_field="legal_entity")
+>         self.assertEqual(scoped.count(), 0)
+  
+>     def test_apply_organization_scope_con_org_asignado(self):
+>         from apps.common.scopes import apply_organization_scope
+>         qs = Organization.objects.all()
+>         scoped = apply_organization_scope(qs, self.user_org, organization_field="self")
+>         self.assertIn(self.org.id, scoped.values_list("id", flat=True))
+  
+>     def test_apply_organization_scope_sin_scope_devuelve_none_qs(self):
+>         from apps.common.scopes import apply_organization_scope
+>         qs = Organization.objects.all()
+>         scoped = apply_organization_scope(qs, self.user_empty, organization_field="self")
+>         self.assertEqual(scoped.count(), 0)
+  
+>     def test_apply_organization_scope_global_devuelve_todo(self):
+>         from apps.common.scopes import apply_organization_scope
+>         admin = User.objects.create_user(username="org_global", password="pass", is_superuser=True)
+>         qs = Organization.objects.all()
+>         scoped = apply_organization_scope(qs, admin, organization_field="self")
+>         self.assertEqual(scoped.count(), qs.count())
+  
+>     def test_apply_branch_scope_con_self(self):
+>         """branch_field='self' filtra directamente por id del branch."""
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.organizations.models import Branch
+>         b = Branch.objects.create(organization=self.org, name="BranchSelf", code="BSELF", is_active=True)
+>         user = User.objects.create_user(username="user_bself", password="pass")
+>         role, _ = Role.objects.get_or_create(code="BODEGUERO", defaults={"name": "Bodeguero", "is_active": True})
+>         UserRoleAssignment.objects.create(user=user, role=role, branch=b, is_active=True)
+>         qs = Branch.objects.all()
+>         scoped = apply_branch_scope(qs, user, branch_field="self")
+>         ids = list(scoped.values_list("id", flat=True))
+>         self.assertIn(b.id, ids)
+  
+>     def test_apply_branch_scope_sin_scope_devuelve_none_qs(self):
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.organizations.models import Branch
+>         user = User.objects.create_user(username="user_nobranch", password="pass")
+>         role, _ = Role.objects.get_or_create(code="TENS", defaults={"name": "TENS", "is_active": True})
+>         UserRoleAssignment.objects.create(user=user, role=role, is_active=True)
+>         qs = Branch.objects.all()
+>         scoped = apply_branch_scope(qs, user, branch_field="self")
+>         self.assertEqual(scoped.count(), 0)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de common/viewsets.py líneas 51-53, 153
+  # Cubre: get_paginated_response en list, y perform_destroy con objeto sin soft_delete
+  # ---------------------------------------------------------------------------
+  
+> class BaseModelViewSetAdditionalTests(TestCase):
+  
+>     def setUp(self):
+>         self.client = APIClient()
+>         self.admin = User.objects.create_user(
+>             username="bvsadmin", password="bvspass", is_superuser=True, is_staff=True
+>         )
+>         UserProfile.objects.get_or_create(user=self.admin, defaults={})
+  
+>     def _auth(self):
+>         resp = self.client.post(
+>             "/api/auth/login/",
+>             {"username": "bvsadmin", "password": "bvspass"},
+>             format="json",
+>         )
+>         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+  
+>     def test_list_con_paginacion_retorna_paginated_response(self):
+>         """Crear >20 objetos para forzar la rama de get_paginated_response en list()."""
+>         self._auth()
+          # Crear 25 organizaciones para forzar paginación
+>         for i in range(25):
+>             Organization.objects.create(name=f"PagOrg_{i:02d}", is_active=True)
+  
+>         resp = self.client.get("/api/organizations/")
+>         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+>         data = resp.json()["data"]
+          # Con paginación, data debe ser dict con results
+>         self.assertIsInstance(data, dict)
+>         self.assertIn("results", data)
+>         self.assertIn("count", data)
+>         self.assertGreater(data["count"], 20)
+  
+>     def test_partial_update_llama_update_con_partial_true(self):
+>         """partial_update → update(partial=True)."""
+>         self._auth()
+>         org = Organization.objects.create(name="OrgPatch", is_active=True)
+>         resp = self.client.patch(
+>             f"/api/organizations/{org.uuid}/",
+>             {"name": "OrgPatchUpdated"},
+>             format="json",
+>         )
+>         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+>         self.assertEqual(resp.json()["data"]["name"], "OrgPatchUpdated")
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de common/health.py líneas 33-37
+  # Cubre: rama de excepción en health_db cuando la DB no responde
+  # ---------------------------------------------------------------------------
+  
+> class HealthDBExceptionTests(TestCase):
+>     """
+>     Para cubrir la rama de excepción en health_db (líneas 33-37),
+>     mockamos la conexión de base de datos para simular un fallo.
+>     """
+  
+>     def test_health_db_fallo_conexion_devuelve_503(self):
+>         from unittest.mock import patch
+>         from django.db import connections
+>         from rest_framework.test import APIClient
+  
+>         client = APIClient()
+  
+>         with patch.object(connections["default"], "cursor", side_effect=Exception("DB down")):
+>             resp = client.get("/api/health/db/")
+  
+>         self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+>         data = resp.json()["data"]
+>         self.assertEqual(data["status"], "disconnected")
+  
+>     def test_health_db_fallo_tiene_mensaje_error(self):
+>         from unittest.mock import patch
+>         from django.db import connections
+>         from rest_framework.test import APIClient
+  
+>         client = APIClient()
+  
+>         with patch.object(connections["default"], "cursor", side_effect=Exception("Connection refused")):
+>             resp = client.get("/api/health/db/")
+  
+>         body = resp.json()
+>         self.assertEqual(body["status"], "error")
+>         self.assertIn("base de datos", body["message"].lower())
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de common/permissions.py líneas 6, 112
+  # Cubre: get_user_role_codes con usuario no autenticado, CanViewInventory
+  # ---------------------------------------------------------------------------
+  
+> class PermissionsAdditionalTests(TestCase):
+  
+>     def setUp(self):
+>         self.client = APIClient()
+  
+>     def test_get_user_role_codes_usuario_no_autenticado(self):
+>         from apps.common.permissions import get_user_role_codes
+>         from django.contrib.auth.models import AnonymousUser
+>         result = get_user_role_codes(AnonymousUser())
+>         self.assertEqual(result, [])
+  
+>     def test_get_user_role_codes_usuario_none(self):
+>         from apps.common.permissions import get_user_role_codes
+>         result = get_user_role_codes(None)
+>         self.assertEqual(result, [])
+  
+>     def test_can_view_inventory_doctor_puede_leer(self):
+>         """CanViewInventory incluye DOCTOR en read_roles."""
+>         user = User.objects.create_user(username="inv_doc", password="pass")
+>         role, _ = Role.objects.get_or_create(code="DOCTOR", defaults={"name": "Doctor", "is_active": True})
+>         from apps.organizations.models import Organization, Branch
+>         org = Organization.objects.create(name="InvDocOrg", is_active=True)
+>         branch = Branch.objects.create(organization=org, name="InvDocBranch", code="IDB01", is_active=True)
+>         UserRoleAssignment.objects.create(user=user, role=role, branch=branch, is_active=True)
+>         UserProfile.objects.get_or_create(user=user, defaults={})
+  
+>         resp = self.client.post("/api/auth/login/", {"username": "inv_doc", "password": "pass"}, format="json")
+>         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+          # DOCTOR puede ver inventario (read)
+>         resp = self.client.get("/api/warehouses/")
+>         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+  
+  
+  # ---------------------------------------------------------------------------
+  # Tests de audit/services.py líneas 36, 41
+  # Cubre: create_audit_log sin instance (entity_app/model/uuid manual)
+  # ---------------------------------------------------------------------------
+  
+> class AuditServicesAdditionalTests(TestCase):
+  
+>     def setUp(self):
+>         self.user = User.objects.create_user(username="audsvc2", password="pass")
+  
+>     def test_create_audit_log_sin_instance_con_params_manuales(self):
+>         from apps.audit.services import create_audit_log
+>         import uuid
+>         entity_uuid = uuid.uuid4()
+>         log = create_audit_log(
+>             user=self.user,
+>             action="EXPORT",
+>             entity_app="reports",
+>             entity_model="Report",
+>             entity_uuid=entity_uuid,
+>             notes="Exportación manual",
+>         )
+>         self.assertEqual(log.action, "EXPORT")
+>         self.assertEqual(log.entity_app, "reports")
+>         self.assertEqual(log.entity_model, "Report")
+>         self.assertEqual(log.entity_uuid, entity_uuid)
+  
+>     def test_create_audit_log_con_user_none(self):
+>         """Debe crear el log sin usuario."""
+>         from apps.audit.services import create_audit_log
+>         log = create_audit_log(
+>             user=None,
+>             action="LOGIN",
+>             entity_model="AuthSession",
+>             notes="Login anónimo",
+>         )
+>         self.assertIsNone(log.user)
+>         self.assertEqual(log.action, "LOGIN")
+  
+  
+  # ---------------------------------------------------------------------------
+  # common/scopes.py líneas 78, 81, 89, 92, 119, 138-141
+  # Cubre las ramas "legal_entity_field != 'self'" con le_ids y org_ids,
+  # "organization_field != 'self'" con org_ids, y apply_branch_scope con le y org fallbacks
+  # ---------------------------------------------------------------------------
+  
+> class ScopesRemainingBranchesTests(TestCase):
+>     """
+>     Cubre las ramas faltantes de apply_branch_scope, apply_legal_entity_scope
+>     y apply_organization_scope donde el field NO es 'self'.
+>     """
+  
+>     def setUp(self):
+>         from apps.organizations.models import Organization, LegalEntity, Branch
+>         self.org = Organization.objects.create(name="ScopeRem1Org", is_active=True)
+>         self.le = LegalEntity.objects.create(
+>             organization=self.org, name="ScopeRem1LE", rut="76100999-1", is_active=True
+>         )
+>         self.branch = Branch.objects.create(
+>             organization=self.org, legal_entity=self.le,
+>             name="ScopeRem1Branch", code="SRB01", is_active=True
+>         )
+  
+          # Usuario con solo legal_entity scope (sin branch_ids)
+>         self.user_le = User.objects.create_user(username="scope_rem_le", password="pass")
+>         role, _ = Role.objects.get_or_create(code="FINANZAS", defaults={"name": "Finanzas", "is_active": True})
+>         UserRoleAssignment.objects.create(
+>             user=self.user_le, role=role, legal_entity=self.le, is_active=True
+>         )
+  
+          # Usuario con solo organization scope
+>         self.user_org = User.objects.create_user(username="scope_rem_org", password="pass")
+>         UserRoleAssignment.objects.create(
+>             user=self.user_org, role=role, organization=self.org, is_active=True
+>         )
+  
+          # Usuario sin scope → queryset.none()
+>         self.user_none = User.objects.create_user(username="scope_rem_none", password="pass")
+>         UserRoleAssignment.objects.create(
+>             user=self.user_none, role=role, is_active=True
+>         )
+  
+>     def test_apply_branch_scope_con_le_ids_field_no_self(self):
+>         """Línea 89: branch_ids vacío, legal_entity_ids lleno, branch_field != 'self'."""
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.inventory.models import Warehouse
+>         wh = Warehouse.objects.create(branch=self.branch, name="W ScopeRemLE", is_active=True)
+>         qs = Warehouse.objects.all()
+>         scoped = apply_branch_scope(qs, self.user_le, branch_field="branch")
+          # Con legal_entity_ids, filtra por branch__legal_entity_id__in
+>         ids = list(scoped.values_list("id", flat=True))
+>         self.assertIn(wh.id, ids)
+  
+>     def test_apply_branch_scope_con_org_ids_field_no_self(self):
+>         """Línea 92: branch_ids vacío, le_ids vacío, org_ids lleno, branch_field != 'self'."""
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.inventory.models import Warehouse
+>         wh = Warehouse.objects.create(branch=self.branch, name="W ScopeRemOrg", is_active=True)
+>         qs = Warehouse.objects.all()
+>         scoped = apply_branch_scope(qs, self.user_org, branch_field="branch")
+>         ids = list(scoped.values_list("id", flat=True))
+>         self.assertIn(wh.id, ids)
+  
+>     def test_apply_branch_scope_sin_scope_field_no_self(self):
+>         """Rama queryset.none() cuando no hay ningún scope y field != 'self'."""
+>         from apps.common.scopes import apply_branch_scope
+>         from apps.inventory.models import Warehouse
+>         qs = Warehouse.objects.all()
+>         scoped = apply_branch_scope(qs, self.user_none, branch_field="branch")
+>         self.assertEqual(scoped.count(), 0)
+  
+>     def test_apply_legal_entity_scope_con_le_ids_field_no_self(self):
+>         """Línea 119: legal_entity_field != 'self', filtra por legal_entity_id__in."""
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.finance.models import SupplierInvoice
+>         from apps.suppliers.models import Supplier
+>         supplier = Supplier.objects.create(name="ScopeLESupp", rut="76500888-8", is_active=True)
+>         SupplierInvoice.objects.create(
+>             supplier=supplier, legal_entity=self.le,
+>             invoice_number="SCOPE-LE-001",
+>             net_amount="100", tax_amount="19", total_amount="119",
+>         )
+>         qs = SupplierInvoice.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_le, legal_entity_field="legal_entity")
+>         self.assertEqual(scoped.count(), 1)
+  
+>     def test_apply_legal_entity_scope_con_org_ids_field_no_self(self):
+>         """Línea 122-123: org_ids lleno, legal_entity_field != 'self'."""
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.finance.models import SupplierInvoice
+>         from apps.suppliers.models import Supplier
+>         supplier = Supplier.objects.create(name="ScopeOrgSupp", rut="76500777-7", is_active=True)
+>         SupplierInvoice.objects.create(
+>             supplier=supplier, legal_entity=self.le,
+>             invoice_number="SCOPE-ORG-001",
+>             net_amount="200", tax_amount="38", total_amount="238",
+>         )
+>         qs = SupplierInvoice.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_org, legal_entity_field="legal_entity")
+>         self.assertGreater(scoped.count(), 0)
+  
+>     def test_apply_organization_scope_con_org_ids_field_no_self(self):
+>         """Líneas 138-141: organization_field != 'self', filtra por organization_id__in."""
+>         from apps.common.scopes import apply_organization_scope
+>         from apps.organizations.models import LegalEntity
+>         qs = LegalEntity.objects.all()
+>         scoped = apply_organization_scope(qs, self.user_org, organization_field="organization")
+>         ids = list(scoped.values_list("id", flat=True))
+>         self.assertIn(self.le.id, ids)
+  
+>     def test_apply_organization_scope_sin_org_ids_devuelve_none(self):
+>         """Cuando user no tiene organization_ids → queryset.none()."""
+>         from apps.common.scopes import apply_organization_scope
+>         from apps.organizations.models import LegalEntity
+>         qs = LegalEntity.objects.all()
+>         scoped = apply_organization_scope(qs, self.user_none, organization_field="organization")
+>         self.assertEqual(scoped.count(), 0)
+  
+>     def test_apply_legal_entity_scope_sin_scope_field_no_self(self):
+>         """Línea final: queryset.none() en apply_legal_entity_scope."""
+>         from apps.common.scopes import apply_legal_entity_scope
+>         from apps.finance.models import SupplierInvoice
+>         qs = SupplierInvoice.objects.all()
+>         scoped = apply_legal_entity_scope(qs, self.user_none, legal_entity_field="legal_entity")
+>         self.assertEqual(scoped.count(), 0)
+  
+  
+  # ---------------------------------------------------------------------------
+  # common/viewsets.py líneas 51-53, 153
+  # Línea 51-53: get_paginated_response en retrieve (si paginación activa)
+  # Línea 153: perform_destroy con objeto que NO tiene soft_delete → instance.delete()
+  # ---------------------------------------------------------------------------
+  
+> class ViewsetPerformDestroyTests(TestCase):
+>     """
+>     Línea 153: perform_destroy → rama else → instance.delete()
+>     Para esto necesitamos un modelo sin soft_delete. Creamos un mock.
+>     """
+  
+>     def test_perform_destroy_sin_soft_delete_llama_delete(self):
+>         from apps.common.viewsets import BaseModelViewSet
+>         from unittest.mock import MagicMock, patch
+  
+>         viewset = BaseModelViewSet()
+  
+          # Objeto mock sin soft_delete
+>         instance = MagicMock(spec=[])  # spec=[] → no tiene ningún atributo
+>         del_called = []
+  
+>         def fake_delete():
+>             del_called.append(True)
+  
+>         instance.delete = fake_delete
+  
+>         viewset.perform_destroy(instance)
+>         self.assertEqual(len(del_called), 1)

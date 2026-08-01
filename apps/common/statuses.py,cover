@@ -1,0 +1,107 @@
+> class SupplyRequestStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING = "PENDIENTE"
+>     SUBMITTED = "ENVIADA"
+>     APPROVED = "APROBADA"
+>     REJECTED = "RECHAZADA"
+>     OBSERVED = "OBSERVADA"
+>     CONVERTED_TO_PURCHASE_ORDER = "CONVERTIDA_OC"
+>     CLOSED = "CERRADA"
+>     CANCELLED = "CANCELADA"
+  
+>     VALID_FOR_CONVERSION = [
+>         APPROVED,
+>     ]
+  
+>     FINAL_STATUSES = [
+>         REJECTED,
+>         CONVERTED_TO_PURCHASE_ORDER,
+>         CLOSED,
+>         CANCELLED,
+>     ]
+  
+  
+> class PurchaseOrderStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING_APPROVAL = "PENDIENTE_APROBACION"
+>     APPROVED = "APROBADA"
+>     SENT_TO_SUPPLIER = "ENVIADA_PROVEEDOR"
+>     PARTIALLY_RECEIVED = "RECIBIDA_PARCIAL"
+>     RECEIVED = "RECIBIDA"
+>     CLOSED = "CERRADA"
+>     CANCELLED = "CANCELADA"
+  
+>     VALID_FOR_SEND = [
+>         APPROVED,
+>     ]
+  
+>     VALID_FOR_RECEIPT = [
+>         APPROVED,
+>         SENT_TO_SUPPLIER,
+>         PARTIALLY_RECEIVED,
+>     ]
+  
+>     FINAL_STATUSES = [
+>         RECEIVED,
+>         CLOSED,
+>         CANCELLED,
+>     ]
+  
+  
+> class PurchaseReceiptStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING = "PENDIENTE"
+>     PROCESSED = "PROCESADA"
+>     COMPLETED = "COMPLETADA"
+>     CANCELLED = "CANCELADA"
+  
+>     FINAL_STATUSES = [
+>         PROCESSED,
+>         COMPLETED,
+>         CANCELLED,
+>     ]
+  
+  
+> class StockTransferStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING = "PENDIENTE"
+>     APPROVED = "APROBADO"
+>     REJECTED = "RECHAZADO"
+>     SENT = "ENVIADO"
+>     PARTIALLY_RECEIVED = "RECIBIDO_PARCIAL"
+>     RECEIVED = "RECIBIDO"
+>     CLOSED = "CERRADO"
+>     CANCELLED = "CANCELADO"
+  
+>     VALID_FOR_SEND = [
+>         APPROVED,
+>     ]
+  
+>     VALID_FOR_RECEIVE = [
+>         SENT,
+>         PARTIALLY_RECEIVED,
+>     ]
+  
+>     FINAL_STATUSES = [
+>         REJECTED,
+>         RECEIVED,
+>         CLOSED,
+>         CANCELLED,
+>     ]
+  
+  
+> class SupplierInvoiceStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING = "PENDIENTE"
+>     APPROVED = "APROBADA"
+>     PAID = "PAGADA"
+>     CANCELLED = "CANCELADA"
+>     VOID = "ANULADA"
+  
+  
+> class PaymentStatus:
+>     DRAFT = "BORRADOR"
+>     PENDING = "PENDIENTE"
+>     PAID = "PAGADO"
+>     FAILED = "FALLIDO"
+>     CANCELLED = "CANCELADO"

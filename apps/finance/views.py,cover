@@ -1,0 +1,132 @@
+> from apps.common.viewsets import BaseModelViewSet
+> from apps.common.permissions import CanManageFinance
+> from apps.common.scopes import apply_legal_entity_scope
+  
+> from .models import SupplierInvoice, Payment, Budget
+> from .serializers import SupplierInvoiceSerializer, PaymentSerializer, BudgetSerializer
+  
+  
+> class SupplierInvoiceViewSet(BaseModelViewSet):
+>     queryset = SupplierInvoice.objects.select_related(
+>         "supplier",
+>         "legal_entity",
+>         "branch",
+>         "cost_center",
+>         "purchase_order",
+>     ).all()
+>     serializer_class = SupplierInvoiceSerializer
+>     permission_classes = [CanManageFinance]
+  
+>     filterset_fields = [
+>         "supplier",
+>         "legal_entity",
+>         "branch",
+>         "cost_center",
+>         "purchase_order",
+>         "status",
+>         "issue_date",
+>         "due_date",
+>     ]
+>     search_fields = [
+>         "supplier__name",
+>         "supplier__rut",
+>         "legal_entity__name",
+>         "branch__name",
+>         "cost_center__name",
+>         "invoice_number",
+>         "notes",
+>     ]
+>     ordering_fields = [
+>         "invoice_number",
+>         "issue_date",
+>         "due_date",
+>         "net_amount",
+>         "tax_amount",
+>         "total_amount",
+>         "status",
+>         "created_at",
+>         "updated_at",
+>     ]
+>     ordering = ["-created_at"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         return apply_legal_entity_scope(qs, self.request.user, legal_entity_field="legal_entity")
+  
+  
+> class PaymentViewSet(BaseModelViewSet):
+>     queryset = Payment.objects.select_related(
+>         "supplier_invoice",
+>         "legal_entity",
+>         "created_by",
+>     ).all()
+>     serializer_class = PaymentSerializer
+>     permission_classes = [CanManageFinance]
+  
+>     filterset_fields = [
+>         "supplier_invoice",
+>         "legal_entity",
+>         "payment_method",
+>         "status",
+>         "payment_date",
+>         "created_by",
+>     ]
+>     search_fields = [
+>         "supplier_invoice__invoice_number",
+>         "transaction_reference",
+>         "check_number",
+>         "bank_account",
+>         "notes",
+>     ]
+>     ordering_fields = [
+>         "payment_date",
+>         "amount",
+>         "status",
+>         "created_at",
+>         "updated_at",
+>     ]
+>     ordering = ["-created_at"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         return apply_legal_entity_scope(qs, self.request.user, legal_entity_field="legal_entity")
+  
+  
+> class BudgetViewSet(BaseModelViewSet):
+>     queryset = Budget.objects.select_related(
+>         "legal_entity",
+>         "branch",
+>         "cost_center",
+>         "category",
+>     ).all()
+>     serializer_class = BudgetSerializer
+>     permission_classes = [CanManageFinance]
+  
+>     filterset_fields = [
+>         "legal_entity",
+>         "branch",
+>         "cost_center",
+>         "category",
+>         "period_year",
+>         "period_month",
+>     ]
+>     search_fields = [
+>         "legal_entity__name",
+>         "branch__name",
+>         "cost_center__name",
+>         "category__name",
+>         "notes",
+>     ]
+>     ordering_fields = [
+>         "period_year",
+>         "period_month",
+>         "budget_amount",
+>         "consumed_amount",
+>         "created_at",
+>         "updated_at",
+>     ]
+>     ordering = ["-period_year", "-period_month"]
+  
+>     def get_queryset(self):
+>         qs = super().get_queryset()
+>         return apply_legal_entity_scope(qs, self.request.user, legal_entity_field="legal_entity")

@@ -1,0 +1,43 @@
+from django.core.exceptions import ValidationError
+
+
+def validate_has_items(instance, related_name="items", message=None):
+    manager = getattr(instance, related_name, None)
+
+    if manager is None:
+        raise ValidationError(f"El registro no tiene relación {related_name}.")
+
+    if not manager.exists():
+        raise ValidationError(message or "El registro debe tener al menos un ítem.")
+
+
+def validate_status_in(instance, allowed_statuses, message=None):
+    current_status = getattr(instance, "status", None)
+
+    if current_status not in allowed_statuses:
+        allowed = ", ".join(allowed_statuses)
+        raise ValidationError(
+            message
+            or f"Estado inválido. Estado actual: {current_status}. Estados permitidos: {allowed}."
+        )
+
+
+def validate_status_not_in(instance, blocked_statuses, message=None):
+    current_status = getattr(instance, "status", None)
+
+    if current_status in blocked_statuses:
+        blocked = ", ".join(blocked_statuses)
+        raise ValidationError(
+            message
+            or f"No se puede operar este registro en estado {current_status}. Estados bloqueados: {blocked}."
+        )
+
+
+def validate_positive_quantity(value, message=None):
+    if value is None or value <= 0:
+        raise ValidationError(message or "La cantidad debe ser mayor a cero.")
+
+
+def validate_required(value, field_name):
+    if value in [None, ""]:
+        raise ValidationError(f"El campo {field_name} es obligatorio.")

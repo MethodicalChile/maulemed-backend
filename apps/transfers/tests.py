@@ -1,0 +1,1053 @@
+"""
+Tests para la app transfers:
+- StockTransfer: CRUD, flujo (approve, reject, send, receive, close)
+- StockTransferItem: CRUD, validaciones
+- Services: approve/send/receive/close_stock_transfer
+- Permisos CanManageTransfers / CanApproveTransfer
+"""
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.test import TestCase
+from rest_framework import status
+from rest_framework.test import APIClient
+
+from apps.accounts.models import Role, UserRoleAssignment, UserProfile
+from apps.organizations.models import Organization, Branch
+from apps.products.models import ProductCategory, UnitOfMeasure, Product
+from apps.inventory.models import Warehouse, InventoryStock
+from apps.transfers.models import StockTransfer, StockTransferItem
+
+User = get_user_model()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def make_superuser(username="transadmin", password="transpass"):
+    u = User.objects.create_user(username=username, password=password, is_superuser=True, is_staff=True)
+    UserProfile.objects.get_or_create(user=u, defaults={})
+    return u
+
+
+def setup_org_branches():
+    org = Organization.objects.create(name="TransOrg", is_active=True)
+    b1 = Branch.objects.create(organization=org, name="Origen", code="OR001", is_active=True)
+    b2 = Branch.objects.create(organization=org, name="Destino", code="DE001", is_active=True)
+    return org, b1, b2
+
+
+def make_product(name="Prod Trans"):
+    cat, _ = ProductCategory.objects.get_or_create(name="Cat Trans")
+    unit, _ = UnitOfMeasure.objects.get_or_create(code="UN_T", defaults={"name": "Unidad"})
+    return Product.objects.create(name=name, category=cat, unit=unit, is_active=True)
+
+
+def make_warehouse(branch, name="Bodega Trans"):
+    return Warehouse.objects.create(branch=branch, name=name, is_active=True)
+
+
+def make_stock(warehouse, product, quantity=Decimal("50")):
+    stock, _ = InventoryStock.objects.get_or_create(
+        warehouse=warehouse,
+        product=product,
+        defaults={"quantity": quantity, "reserved_quantity": Decimal("0")},
+    )
+    stock.quantity = quantity
+    stock.save()
+    return stock
+
+
+def make_transfer(origin_branch, dest_branch, user, transfer_type="TRASPASO", status_val="SOLICITADO"):
+    return StockTransfer.objects.create(
+        origin_branch=origin_branch,
+        destination_branch=dest_branch,
+        transfer_type=transfer_type,
+        requested_by=user,
+        status=status_val,
+    )
+
+
+class BaseTransferTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = make_superuser()
+        self.org, self.branch_origin, self.branch_dest = setup_org_branches()
+        self.product = make_product()
+        self.warehouse_origin = make_warehouse(self.branch_origin, name="Bodega Origen")
+        self.warehouse_dest = make_warehouse(self.branch_dest, name="Bodega Destino")
+        make_stock(self.warehouse_origin, self.product, quantity=Decimal("100"))
+
+    def _auth(self, username="transadmin", password="transpass"):
+        resp = self.client.post(
+            "/api/auth/login/",
+            {"username": username, "password": password},
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def _auth_admin(self):
+        self._auth()
+
+
+# ---------------------------------------------------------------------------
+# Tests de modelos StockTransfer
+# ---------------------------------------------------------------------------
+
+class StockTransferModelTests(TestCase):
+
+    def setUp(self):
+        self.org, self.b1, self.b2 = setup_org_branches()
+
+    def test_clean_falla_si_origen_igual_destino(self):
+        transfer = StockTransfer(
+            origin_branch=self.b1,
+            destination_branch=self.b1,
+            transfer_type="TRASPASO",
+            status="SOLICITADO",
+        )
+        with self.assertRaises(ValidationError):
+            transfer.clean()
+
+    def test_clean_devolucion_requiere_padre(self):
+        transfer = StockTransfer(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="DEVOLUCION",
+            parent_transfer=None,
+            status="SOLICITADO",
+        )
+        with self.assertRaises(ValidationError):
+            transfer.clean()
+
+    def test_str_transfer(self):
+        transfer = StockTransfer(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+        )
+        self.assertIn("TRASPASO", str(transfer))
+
+
+class StockTransferItemModelTests(TestCase):
+
+    def setUp(self):
+        org, self.b1, self.b2 = setup_org_branches()
+        admin = User.objects.create_user(username="tmadmin", password="pass", is_superuser=True)
+        self.transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=admin,
+            status="SOLICITADO",
+        )
+        self.product = make_product(name="Prod Item Trans")
+
+    def test_clean_falla_si_aprobado_mayor_a_solicitado(self):
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("10"),
+        )
+        with self.assertRaises(ValidationError):
+            item.clean()
+
+    def test_clean_falla_si_aprobado_negativo(self):
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("-1"),
+        )
+        with self.assertRaises(ValidationError):
+            item.clean()
+
+    def test_clean_falla_si_enviado_mayor_a_aprobado(self):
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("5"),
+            sent_quantity=Decimal("10"),
+        )
+        with self.assertRaises(ValidationError):
+            item.clean()
+
+
+# ---------------------------------------------------------------------------
+# Tests de ViewSet StockTransfer (flujo API)
+# ---------------------------------------------------------------------------
+
+class StockTransferViewSetTests(BaseTransferTest):
+
+    def test_crear_traspaso(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/stock-transfers/",
+            {
+                "origin_branch": self.branch_origin.id,
+                "destination_branch": self.branch_dest.id,
+                "transfer_type": "TRASPASO",
+                "status": "SOLICITADO",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["data"]["transfer_type"], "TRASPASO")
+
+    def test_no_se_puede_crear_traspaso_mismo_origen_destino(self):
+        self._auth_admin()
+        response = self.client.post(
+            "/api/stock-transfers/",
+            {
+                "origin_branch": self.branch_origin.id,
+                "destination_branch": self.branch_origin.id,
+                "transfer_type": "TRASPASO",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_listar_traspasos(self):
+        self._auth_admin()
+        response = self.client.get("/api/stock-transfers/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_approve_traspaso_sin_items_devuelve_400(self):
+        self._auth_admin()
+        transfer = make_transfer(self.branch_origin, self.branch_dest, self.admin)
+        response = self.client.post(f"/api/stock-transfers/{transfer.uuid}/approve/")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_approve_traspaso_con_items(self):
+        self._auth_admin()
+        transfer = make_transfer(self.branch_origin, self.branch_dest, self.admin)
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+        )
+        response = self.client.post(f"/api/stock-transfers/{transfer.uuid}/approve/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["status"], StockTransfer.STATUS_APPROVED)
+
+    def test_reject_traspaso(self):
+        self._auth_admin()
+        transfer = make_transfer(self.branch_origin, self.branch_dest, self.admin)
+        response = self.client.post(
+            f"/api/stock-transfers/{transfer.uuid}/reject/",
+            {"rejection_reason": "No hay necesidad"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["status"], StockTransfer.STATUS_REJECTED)
+
+    def test_send_traspaso_descuenta_stock(self):
+        self._auth_admin()
+        transfer = make_transfer(
+            self.branch_origin, self.branch_dest, self.admin,
+            status_val=StockTransfer.STATUS_APPROVED
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("5"),
+        )
+        stock_antes = InventoryStock.objects.get(
+            warehouse=self.warehouse_origin, product=self.product
+        ).quantity
+
+        response = self.client.post(f"/api/stock-transfers/{transfer.uuid}/send/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["stock_transfer"]["status"], StockTransfer.STATUS_SENT)
+
+        stock_despues = InventoryStock.objects.get(
+            warehouse=self.warehouse_origin, product=self.product
+        ).quantity
+        self.assertEqual(stock_despues, stock_antes - Decimal("5"))
+
+    def test_receive_traspaso_aumenta_stock_destino(self):
+        self._auth_admin()
+        transfer = make_transfer(
+            self.branch_origin, self.branch_dest, self.admin,
+            status_val=StockTransfer.STATUS_SENT
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("3"),
+            approved_quantity=Decimal("3"),
+            sent_quantity=Decimal("3"),
+        )
+        response = self.client.post(f"/api/stock-transfers/{transfer.uuid}/receive/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["stock_transfer"]["status"], StockTransfer.STATUS_RECEIVED)
+
+        # El stock en destino debe haber aumentado
+        stock_dest = InventoryStock.objects.filter(
+            warehouse=self.warehouse_dest, product=self.product
+        ).first()
+        self.assertIsNotNone(stock_dest)
+        self.assertGreater(stock_dest.quantity, Decimal("0"))
+
+    def test_close_traspaso(self):
+        self._auth_admin()
+        transfer = make_transfer(
+            self.branch_origin, self.branch_dest, self.admin,
+            status_val=StockTransfer.STATUS_RECEIVED
+        )
+        response = self.client.post(f"/api/stock-transfers/{transfer.uuid}/close/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["data"]["status"], StockTransfer.STATUS_CLOSED)
+
+    def test_soft_delete_traspaso(self):
+        self._auth_admin()
+        transfer = make_transfer(self.branch_origin, self.branch_dest, self.admin)
+        response = self.client.delete(f"/api/stock-transfers/{transfer.uuid}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        transfer.refresh_from_db()
+        self.assertIsNotNone(transfer.deleted_at)
+
+    def test_sin_autenticacion_no_puede_listar(self):
+        response = self.client.get("/api/stock-transfers/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ---------------------------------------------------------------------------
+# Tests del servicio approve_stock_transfer
+# ---------------------------------------------------------------------------
+
+class ApproveStockTransferServiceTests(TestCase):
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username="svctr", password="pass", is_superuser=True)
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod SvcTr")
+        self.transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status="SOLICITADO",
+        )
+
+    def test_approve_sin_items_lanza_error(self):
+        from apps.transfers.services import approve_stock_transfer
+        with self.assertRaises(ValidationError):
+            approve_stock_transfer(stock_transfer=self.transfer, user=self.admin)
+
+    def test_approve_con_items_cambia_estado(self):
+        from apps.transfers.services import approve_stock_transfer
+        StockTransferItem.objects.create(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+        )
+        result = approve_stock_transfer(stock_transfer=self.transfer, user=self.admin)
+        self.assertEqual(result.status, StockTransfer.STATUS_APPROVED)
+        self.assertEqual(result.approved_by, self.admin)
+
+
+# ---------------------------------------------------------------------------
+# Tests del servicio send_stock_transfer
+# ---------------------------------------------------------------------------
+
+class SendStockTransferServiceTests(TestCase):
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username="svcsend", password="pass", is_superuser=True)
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod Send")
+        self.w1 = make_warehouse(self.b1, name="W Send")
+        make_stock(self.w1, self.product, quantity=Decimal("50"))
+        self.transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+
+    def test_send_sin_items_lanza_error(self):
+        from apps.transfers.services import send_stock_transfer
+        with self.assertRaises(ValidationError):
+            send_stock_transfer(stock_transfer=self.transfer, user=self.admin)
+
+    def test_send_con_items_descuenta_stock(self):
+        from apps.transfers.services import send_stock_transfer
+        StockTransferItem.objects.create(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("10"),
+            approved_quantity=Decimal("10"),
+        )
+        result = send_stock_transfer(stock_transfer=self.transfer, user=self.admin)
+        self.assertEqual(result["stock_transfer"].status, StockTransfer.STATUS_SENT)
+        stock = InventoryStock.objects.get(warehouse=self.w1, product=self.product)
+        self.assertEqual(stock.quantity, Decimal("40"))
+
+
+# ---------------------------------------------------------------------------
+# Tests de transfers/services.py — close, receive con warehouse explícito
+# ---------------------------------------------------------------------------
+
+class ReceiveStockTransferServiceTests(TestCase):
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username="svcreceive", password="pass", is_superuser=True)
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod Receive")
+        self.w1 = make_warehouse(self.b1, name="W Receive Origin")
+        self.w2 = make_warehouse(self.b2, name="W Receive Dest")
+        make_stock(self.w1, self.product, quantity=Decimal("50"))
+
+    def test_receive_sin_items_falla(self):
+        from apps.transfers.services import receive_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        with self.assertRaises(ValidationError):
+            receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+
+    def test_receive_con_items_aumenta_stock_destino(self):
+        from apps.transfers.services import receive_stock_transfer
+        from apps.inventory.models import InventoryStock
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("5"),
+            sent_quantity=Decimal("5"),
+        )
+        result = receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+        self.assertEqual(result["stock_transfer"].status, StockTransfer.STATUS_RECEIVED)
+        stock_dest = InventoryStock.objects.filter(
+            warehouse=self.w2, product=self.product
+        ).first()
+        self.assertIsNotNone(stock_dest)
+        self.assertGreater(stock_dest.quantity, Decimal("0"))
+
+    def test_close_transfer_cambia_estado(self):
+        from apps.transfers.services import close_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_RECEIVED,
+        )
+        result = close_stock_transfer(stock_transfer=transfer, user=self.admin)
+        self.assertEqual(result.status, StockTransfer.STATUS_CLOSED)
+        self.assertIsNotNone(result.closed_at)
+
+    def test_get_origin_warehouse_primera_bodega_activa(self):
+        from apps.transfers.services import get_origin_warehouse
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        warehouse = get_origin_warehouse(transfer)
+        self.assertEqual(warehouse.branch, self.b1)
+
+    def test_get_destination_warehouse_primera_bodega_activa(self):
+        from apps.transfers.services import get_destination_warehouse
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        warehouse = get_destination_warehouse(transfer)
+        self.assertEqual(warehouse.branch, self.b2)
+
+    def test_get_origin_warehouse_sin_bodega_activa_falla(self):
+        from apps.transfers.services import get_origin_warehouse
+        from apps.organizations.models import Organization, Branch
+        org = Organization.objects.create(name="EmptyWOrg", is_active=True)
+        empty_branch = Branch.objects.create(organization=org, name="EmptyBranch", code="EWBR01", is_active=True)
+        org2 = Organization.objects.create(name="EWOrg2", is_active=True)
+        dest = Branch.objects.create(organization=org2, name="EWDest", code="EWDE01", is_active=True)
+        transfer = StockTransfer.objects.create(
+            origin_branch=empty_branch,
+            destination_branch=dest,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        with self.assertRaises(ValidationError):
+            get_origin_warehouse(transfer)
+
+
+# ---------------------------------------------------------------------------
+# Tests de StockTransferItem — modelo
+# ---------------------------------------------------------------------------
+
+class StockTransferItemAdditionalTests(TestCase):
+
+    def setUp(self):
+        _, self.b1, self.b2 = setup_org_branches()
+        admin = User.objects.create_user(username="stia", password="pass", is_superuser=True)
+        self.transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=admin,
+            status="SOLICITADO",
+        )
+        self.product = make_product(name="Prod STIA")
+
+    def test_clean_falla_si_recibido_mayor_a_enviado(self):
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("10"),
+            approved_quantity=Decimal("10"),
+            sent_quantity=Decimal("8"),
+            received_quantity=Decimal("10"),
+        )
+        with self.assertRaises(ValidationError):
+            item.clean()
+
+    def test_clean_ok_con_cantidades_validas(self):
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("10"),
+            approved_quantity=Decimal("8"),
+            sent_quantity=Decimal("7"),
+            received_quantity=Decimal("6"),
+        )
+        item.clean()  # No debe lanzar excepción
+
+
+# ---------------------------------------------------------------------------
+# Tests de transfers/views.py líneas 31-32, 156-157, 193-194, 230-231, 284-285
+# Cubre: ensure_action_permission denegado, ValidationError en send/receive/close
+# ---------------------------------------------------------------------------
+
+class TransferPermissionDeniedTests(TestCase):
+    """
+    Cubre la rama donde ensure_action_permission lanza PermissionDenied
+    cuando el usuario no tiene el permiso específico para la acción.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod PermDenied")
+        self.w1 = make_warehouse(self.b1, name="W PD Origin")
+        make_stock(self.w1, self.product, quantity=Decimal("50"))
+
+        # Admin para crear datos
+        self.admin = make_superuser(username="pdadmin", password="pdpass")
+
+        # Usuario con SECRETARIA: tiene CanManageTransfers (read+write) PERO no CanApproveTransfer
+        from apps.accounts.models import Role, UserRoleAssignment, UserProfile
+        self.sec_user = User.objects.create_user(username="pd_sec", password="pass")
+        role_sec, _ = Role.objects.get_or_create(code="SECRETARIA", defaults={"name": "Secretaria", "is_active": True})
+        UserRoleAssignment.objects.create(user=self.sec_user, role=role_sec, branch=self.b1, is_active=True)
+        UserProfile.objects.get_or_create(user=self.sec_user, defaults={})
+
+    def _auth_admin(self):
+        resp = self.client.post("/api/auth/login/", {"username": "pdadmin", "password": "pdpass"}, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def _auth_sec(self):
+        resp = self.client.post("/api/auth/login/", {"username": "pd_sec", "password": "pass"}, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def _make_transfer_with_item(self, status_val="SOLICITADO"):
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=status_val,
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("5"),
+            sent_quantity=Decimal("5"),
+        )
+        return transfer
+
+    def test_secretaria_no_puede_aprobar_traspaso(self):
+        """SECRETARIA no está en CanApproveTransfer → 403."""
+        self._auth_sec()
+        transfer = self._make_transfer_with_item()
+        resp = self.client.post(f"/api/stock-transfers/{transfer.uuid}/approve/")
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_send_falla_sin_items_devuelve_400(self):
+        """ValidationError en send → 400."""
+        self._auth_admin()
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        # Sin items → ValidationError en el service → 400
+        resp = self.client.post(f"/api/stock-transfers/{transfer.uuid}/send/")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_receive_falla_sin_items_devuelve_400(self):
+        """ValidationError en receive → 400."""
+        self._auth_admin()
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        resp = self.client.post(f"/api/stock-transfers/{transfer.uuid}/receive/")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_stock_transfer_item_crud(self):
+        """Cubrir StockTransferItemViewSet — crear y listar items."""
+        self._auth_admin()
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status="SOLICITADO",
+        )
+        resp = self.client.post(
+            "/api/stock-transfer-items/",
+            {
+                "stock_transfer": transfer.id,
+                "product": self.product.id,
+                "requested_quantity": "3.000",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+        resp = self.client.get("/api/stock-transfer-items/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Tests de transfers/serializers.py línea 64
+# Cubre: validate() para devolución sin parent_transfer
+# ---------------------------------------------------------------------------
+
+class TransferSerializerValidationTests(TestCase):
+
+    def setUp(self):
+        self.client = APIClient()
+        _, self.b1, self.b2 = setup_org_branches()
+        self.admin = make_superuser(username="tsv_admin", password="pass")
+
+    def _auth(self):
+        resp = self.client.post("/api/auth/login/", {"username": "tsv_admin", "password": "pass"}, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def test_devolucion_sin_parent_devuelve_400(self):
+        """validate() en StockTransferSerializer debe rechazar DEVOLUCION sin parent."""
+        self._auth()
+        resp = self.client.post(
+            "/api/stock-transfers/",
+            {
+                "origin_branch": self.b1.id,
+                "destination_branch": self.b2.id,
+                "transfer_type": "DEVOLUCION",
+                "parent_transfer": None,
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# ---------------------------------------------------------------------------
+# transfers/services.py líneas 20, 44, 55, 65, 116, 196, 268
+# 20: to_decimal(None)
+# 44, 55: get_origin/destination_warehouse con atributo explícito en el transfer
+# 65: _get_status retorna candidate que existe en el modelo
+# 116: item con lot → pasa lot.lot_number al increase_stock
+# 196, 268: send/receive actualizan sent_quantity y received_quantity en items
+# transfers/views.py 31-32: ensure_action_permission PermissionDenied
+# transfers/views.py 230-231: close con ValidationError
+# transfers/models.py 211-212, 215: StockTransferItem.clean() returned_quantity
+# ---------------------------------------------------------------------------
+
+class TransferServicesRemainingTests(TestCase):
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username="tsrm_admin", password="pass", is_superuser=True)
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod TSRM")
+        self.w1 = make_warehouse(self.b1, name="W TSRM1")
+        self.w2 = make_warehouse(self.b2, name="W TSRM2")
+        make_stock(self.w1, self.product, quantity=Decimal("100"))
+
+    def test_to_decimal_none(self):
+        """Línea 20: to_decimal(None) → Decimal('0')."""
+        from apps.transfers.services import to_decimal
+        self.assertEqual(to_decimal(None), Decimal("0"))
+
+    def test_get_status_retorna_primer_candidato_existente(self):
+        """Línea 65: _get_status devuelve el primer candidato que existe en el modelo."""
+        from apps.transfers.services import _get_status
+        result = _get_status(StockTransfer, ["STATUS_CLOSED", "STATUS_NO_EXISTE"], fallback="FALLBACK")
+        self.assertEqual(result, StockTransfer.STATUS_CLOSED)
+
+    def test_get_status_retorna_fallback(self):
+        """_get_status cuando ningún candidato existe."""
+        from apps.transfers.services import _get_status
+        result = _get_status(StockTransfer, ["NO_EXISTE_1", "NO_EXISTE_2"], fallback="MI_FALLBACK")
+        self.assertEqual(result, "MI_FALLBACK")
+
+    def test_send_actualiza_sent_quantity_en_item(self):
+        """Línea 196: item.sent_quantity = quantity; item.save(...)."""
+        from apps.transfers.services import send_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        item = StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("8"),
+            approved_quantity=Decimal("8"),
+            sent_quantity=Decimal("0"),
+        )
+        result = send_stock_transfer(stock_transfer=transfer, user=self.admin)
+        item.refresh_from_db()
+        self.assertEqual(item.sent_quantity, Decimal("8"))
+        self.assertEqual(result["stock_transfer"].status, StockTransfer.STATUS_SENT)
+
+    def test_receive_actualiza_received_quantity_en_item(self):
+        """Línea 268: item.received_quantity = quantity; item.save(...)."""
+        from apps.transfers.services import receive_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        item = StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            requested_quantity=Decimal("6"),
+            approved_quantity=Decimal("6"),
+            sent_quantity=Decimal("6"),
+            received_quantity=Decimal("0"),
+        )
+        result = receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+        item.refresh_from_db()
+        self.assertEqual(item.received_quantity, Decimal("6"))
+
+    def test_receive_con_lot_en_item(self):
+        """Línea 116: item con lot → pasa lot.lot_number, expiration, supplier."""
+        from apps.transfers.services import receive_stock_transfer
+        from apps.inventory.models import InventoryLot
+        lot = InventoryLot.objects.create(
+            warehouse=self.w1,
+            product=self.product,
+            lot_number="LOT-TR-RECV",
+            quantity=Decimal("10"),
+            status=InventoryLot.STATUS_AVAILABLE,
+        )
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer,
+            product=self.product,
+            lot=lot,
+            requested_quantity=Decimal("5"),
+            approved_quantity=Decimal("5"),
+            sent_quantity=Decimal("5"),
+        )
+        result = receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+        # En destino debe haberse creado lote
+        from apps.inventory.models import InventoryLot
+        dest_lot = InventoryLot.objects.filter(
+            warehouse=self.w2, product=self.product, lot_number="LOT-TR-RECV"
+        ).first()
+        self.assertIsNotNone(dest_lot)
+
+
+class TransferViewsRemainingTests(TestCase):
+    """
+    transfers/views.py líneas 31-32: ensure_action_permission lanza PermissionDenied
+    transfers/views.py líneas 230-231: close con ValidationError → 400
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        _, self.b1, self.b2 = setup_org_branches()
+        self.admin = make_superuser(username="tvr_admin", password="pass")
+        self.product = make_product(name="Prod TVR")
+        self.w1 = make_warehouse(self.b1, name="W TVR1")
+        make_stock(self.w1, self.product, quantity=Decimal("50"))
+
+    def _auth_admin(self):
+        resp = self.client.post("/api/auth/login/", {"username": "tvr_admin", "password": "pass"}, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.json()["data"]["access"]}')
+
+    def test_close_sin_items_devuelve_400(self):
+        """Líneas 230-231: ValidationError en close_stock_transfer → 400."""
+        # close_stock_transfer en sí no lanza ValidationError normalmente;
+        # para cubrir la rama, necesitamos que el service falle.
+        # La vista captura ValidationError y devuelve 400.
+        # close_stock_transfer no valida items — pasemos un transfer válido.
+        # En realidad close_stock_transfer no lanza error. La rama 230-231 es el except.
+        # Para cubrirla: mockamos close_stock_transfer para que lance ValidationError.
+        from unittest.mock import patch
+        from django.core.exceptions import ValidationError as DjValidationError
+
+        self._auth_admin()
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=self.admin,
+            status=StockTransfer.STATUS_RECEIVED,
+        )
+
+        with patch("apps.transfers.views.close_stock_transfer", side_effect=DjValidationError("Forzado")):
+            resp = self.client.post(f"/api/stock-transfers/{transfer.uuid}/close/")
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_ensure_action_permission_deniega_cuando_no_tiene_permiso(self):
+        """Líneas 31-32: ensure_action_permission lanza PermissionDenied."""
+        from apps.transfers.views import ensure_action_permission
+        from apps.common.permissions import CanApproveTransfer
+        from rest_framework.exceptions import PermissionDenied
+        from unittest.mock import MagicMock
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        # Usuario sin roles → CanApproveTransfer falla
+        user_no_perm = User.objects.create_user(username="no_perm_tvr", password="pass")
+        request = MagicMock()
+        request.user = user_no_perm
+        view = MagicMock()
+
+        with self.assertRaises(PermissionDenied):
+            ensure_action_permission(CanApproveTransfer, request, view)
+
+
+class StockTransferItemReturnedQuantityTests(TestCase):
+    """
+    transfers/models.py líneas 211-212, 215:
+    211-212: returned_quantity > received_quantity → ValidationError
+    215: returned_quantity valida solo si received_quantity existe
+    """
+
+    def setUp(self):
+        _, self.b1, self.b2 = setup_org_branches()
+        admin = User.objects.create_user(username="stiret", password="pass", is_superuser=True)
+        self.transfer = StockTransfer.objects.create(
+            origin_branch=self.b1,
+            destination_branch=self.b2,
+            transfer_type="TRASPASO",
+            requested_by=admin,
+            status="SOLICITADO",
+        )
+        self.product = make_product(name="Prod Returned")
+
+    def test_clean_falla_si_devuelto_mayor_a_recibido(self):
+        """Líneas 211-212: returned_quantity > received_quantity."""
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("10"),
+            approved_quantity=Decimal("8"),
+            sent_quantity=Decimal("8"),
+            received_quantity=Decimal("5"),
+            returned_quantity=Decimal("7"),  # > received_quantity
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            item.clean()
+        self.assertIn("devuelta", str(ctx.exception).lower())
+
+    def test_clean_ok_returned_igual_recibido(self):
+        """returned_quantity == received_quantity → OK."""
+        item = StockTransferItem(
+            stock_transfer=self.transfer,
+            product=self.product,
+            requested_quantity=Decimal("10"),
+            approved_quantity=Decimal("8"),
+            sent_quantity=Decimal("8"),
+            received_quantity=Decimal("5"),
+            returned_quantity=Decimal("5"),
+        )
+        item.clean()  # No debe lanzar excepción
+
+
+# ---------------------------------------------------------------------------
+# transfers/services.py:44 → get_origin_warehouse con origin_warehouse explícito
+# transfers/services.py:55 → get_destination_warehouse con destination_warehouse explícito
+# transfers/services.py:116 → item con lot → increase_stock recibe lot_number
+# transfers/services.py:196 → item.sent_quantity actualizado
+# transfers/services.py:268 → item.received_quantity actualizado
+# ---------------------------------------------------------------------------
+
+class TransferServicesExplicitWarehouseTests(TestCase):
+    """
+    transfers/services.py líneas 44 y 55:
+    get_origin/destination_warehouse cuando el StockTransfer tiene
+    origin_warehouse / destination_warehouse explícitos.
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="tsewr_admin", password="pass", is_superuser=True
+        )
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.w1 = make_warehouse(self.b1, name="W TSEWR1")
+        self.w2 = make_warehouse(self.b2, name="W TSEWR2")
+
+    def test_get_origin_warehouse_usa_atributo_explicito(self):
+        """Línea 44: si el transfer tiene origin_warehouse y no es None → lo usa."""
+        from apps.transfers.services import get_origin_warehouse
+        from unittest.mock import MagicMock
+
+        transfer = MagicMock()
+        transfer.origin_warehouse = self.w1
+        transfer.origin_branch = self.b1
+
+        result = get_origin_warehouse(transfer)
+        self.assertEqual(result, self.w1)
+
+    def test_get_destination_warehouse_usa_atributo_explicito(self):
+        """Línea 55: si el transfer tiene destination_warehouse y no es None → lo usa."""
+        from apps.transfers.services import get_destination_warehouse
+        from unittest.mock import MagicMock
+
+        transfer = MagicMock()
+        transfer.destination_warehouse = self.w2
+        transfer.destination_branch = self.b2
+
+        result = get_destination_warehouse(transfer)
+        self.assertEqual(result, self.w2)
+
+
+class TransferSendReceiveUpdateQuantityTests(TestCase):
+    """
+    transfers/services.py:116 → receive con lot
+    transfers/services.py:196 → send actualiza sent_quantity
+    transfers/services.py:268 → receive actualiza received_quantity
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="tsrq_admin", password="pass", is_superuser=True
+        )
+        UserProfile.objects.get_or_create(user=self.admin, defaults={})
+        _, self.b1, self.b2 = setup_org_branches()
+        self.product = make_product(name="Prod TSRQ")
+        self.w1 = make_warehouse(self.b1, name="W TSRQ1")
+        self.w2 = make_warehouse(self.b2, name="W TSRQ2")
+        make_stock(self.w1, self.product, quantity=Decimal("100"))
+
+    def test_send_actualiza_sent_quantity_del_item(self):
+        """Línea 196: item.sent_quantity = quantity; item.save(...)."""
+        from apps.transfers.services import send_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1, destination_branch=self.b2,
+            transfer_type="TRASPASO", requested_by=self.admin,
+            status=StockTransfer.STATUS_APPROVED,
+        )
+        item = StockTransferItem.objects.create(
+            stock_transfer=transfer, product=self.product,
+            requested_quantity=Decimal("15"),
+            approved_quantity=Decimal("12"),
+            sent_quantity=Decimal("0"),
+        )
+        send_stock_transfer(stock_transfer=transfer, user=self.admin)
+        item.refresh_from_db()
+        self.assertEqual(item.sent_quantity, Decimal("12"))
+
+    def test_receive_actualiza_received_quantity_del_item(self):
+        """Línea 268: item.received_quantity = quantity; item.save(...)."""
+        from apps.transfers.services import receive_stock_transfer
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1, destination_branch=self.b2,
+            transfer_type="TRASPASO", requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        item = StockTransferItem.objects.create(
+            stock_transfer=transfer, product=self.product,
+            requested_quantity=Decimal("8"),
+            approved_quantity=Decimal("8"),
+            sent_quantity=Decimal("8"),
+            received_quantity=Decimal("0"),
+        )
+        receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+        item.refresh_from_db()
+        self.assertEqual(item.received_quantity, Decimal("8"))
+
+    def test_receive_con_lot_en_item_pasa_datos_al_increase(self):
+        """Línea 116: lot = item.lot → increase_stock recibe lot_number y expiration."""
+        from apps.transfers.services import receive_stock_transfer
+        from apps.inventory.models import InventoryLot
+        from datetime import date
+        lot = InventoryLot.objects.create(
+            warehouse=self.w1, product=self.product,
+            lot_number="LOT-RECV-REAL",
+            quantity=Decimal("20"),
+            status=InventoryLot.STATUS_AVAILABLE,
+            expiration_date=date(2027, 6, 30),
+        )
+        transfer = StockTransfer.objects.create(
+            origin_branch=self.b1, destination_branch=self.b2,
+            transfer_type="TRASPASO", requested_by=self.admin,
+            status=StockTransfer.STATUS_SENT,
+        )
+        StockTransferItem.objects.create(
+            stock_transfer=transfer, product=self.product,
+            lot=lot,
+            requested_quantity=Decimal("6"),
+            approved_quantity=Decimal("6"),
+            sent_quantity=Decimal("6"),
+            received_quantity=Decimal("0"),
+        )
+        receive_stock_transfer(stock_transfer=transfer, user=self.admin)
+        # Verificar que se creó el lote en el destino
+        dest_lot = InventoryLot.objects.filter(
+            warehouse=self.w2, product=self.product, lot_number="LOT-RECV-REAL"
+        ).first()
+        self.assertIsNotNone(dest_lot)
+        self.assertEqual(dest_lot.expiration_date, date(2027, 6, 30))

@@ -1,0 +1,132 @@
+import logging
+
+from apps.audit.models import AuditLog
+
+
+logger = logging.getLogger(__name__)
+
+
+def serialize_instance(instance):
+    """
+    Serializa una instancia de modelo a un dict plano con todos los campos,
+    incluyendo los no editables (uuid, created_at, updated_at, deleted_at).
+    model_to_dict omite estos campos, por eso iteramos directamente sobre _meta.
+    """
+    if not instance:
+        return None
+
+    clean_data = {}
+
+    for field in instance._meta.get_fields():
+        # Solo campos concretos (no relaciones inversas ni M2M)
+        if not hasattr(field, "attname"):
+            continue
+
+        attr  = field.attname
+        value = getattr(instance, attr, None)
+
+        if value is None:
+            clean_data[attr] = None
+        elif isinstance(value, (str, int, float, bool)):
+            clean_data[attr] = value
+        else:
+            clean_data[attr] = str(value)
+
+    return clean_data
+
+
+def get_entity_uuid(instance):
+    if not instance:
+        return None
+
+    if hasattr(instance, "uuid"):
+        return instance.uuid
+
+    return None
+
+
+def create_audit_log(
+    *,
+    user=None,
+    action,
+    instance=None,
+    entity_app=None,
+    entity_model=None,
+    entity_uuid=None,
+    old_data=None,
+    new_data=None,
+    notes=None,
+    request=None,
+):
+    if instance is not None:
+        entity_app = entity_app or instance._meta.app_label
+        entity_model = entity_model or instance.__class__.__name__
+        entity_uuid = entity_uuid or get_entity_uuid(instance)
+
+    if request is not None and user is None:
+        user = request.user if request.user and request.user.is_authenticated else None
+
+    audit = AuditLog.objects.create(
+        user=user,
+        action=action,
+        entity_app=entity_app or "",
+        entity_model=entity_model or "",
+        entity_uuid=entity_uuid,
+        old_data=old_data,
+        new_data=new_data,
+        notes=notes,
+    )
+
+    logger.info(
+        f"Auditoría creada action={action} entity={entity_app}.{entity_model} uuid={entity_uuid}"
+    )
+
+    return audit
+
+
+def audit_create(*, user=None, instance, request=None, notes=None):
+    return create_audit_log(
+        user=user,
+        request=request,
+        action="CREATE",
+        instance=instance,
+        old_data=None,
+        new_data=serialize_instance(instance),
+        notes=notes,
+    )
+
+
+def audit_update(*, user=None, instance, old_data=None, request=None, notes=None):
+    return create_audit_log(
+        user=user,
+        request=request,
+        action="UPDATE",
+        instance=instance,
+        old_data=old_data,
+        new_data=serialize_instance(instance),
+        notes=notes,
+    )
+
+
+def audit_delete(*, user=None, instance, old_data=None, request=None, notes=None):
+    return create_audit_log(
+        user=user,
+        request=request,
+        action="DELETE",
+        instance=instance,
+        old_data=old_data or serialize_instance(instance),
+        new_data=None,
+        notes=notes,
+    )
+
+
+def audit_action(*, user=None, action, instance, old_data=None, new_data=None, request=None, notes=None):
+    return create_audit_log(
+        user=user,
+        request=request,
+        action=action,
+        instance=instance,
+        old_data=old_data,
+        new_data=new_data or serialize_instance(instance),
+        notes=notes,
+    )

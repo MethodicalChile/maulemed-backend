@@ -1,0 +1,23 @@
+> import csv
+  
+> from django.http import HttpResponse
+> from django.utils import timezone
+  
+  
+> def csv_response(filename_prefix, headers, rows):
+>     timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+>     filename = f"{filename_prefix}_{timestamp}.csv"
+  
+>     response = HttpResponse(content_type="text/csv; charset=utf-8")
+>     response["Content-Disposition"] = f'attachment; filename="{filename}"'
+  
+      # BOM para que Excel abra bien acentos en Windows.
+>     response.write("\ufeff")
+  
+>     writer = csv.writer(response)
+>     writer.writerow(headers)
+  
+>     for row in rows:
+>         writer.writerow(row)
+  
+>     return response

@@ -1,0 +1,1162 @@
+from datetime import datetime
+
+from django.db.models import Sum, Count, F
+from django.utils.dateparse import parse_date
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+from apps.common.responses import api_response
+from apps.common.scopes import apply_branch_scope, apply_legal_entity_scope
+
+from apps.inventory.models import InventoryStock, InventoryMovement, InventoryLot
+from apps.purchasing.models import PurchaseOrder, PurchaseOrderItem
+from apps.finance.models import SupplierInvoice, Payment, Budget
+from apps.reports.utils import csv_response
+
+
+def get_date_param(request, name):
+    value = request.GET.get(name)
+
+    if not value:
+        return None
+
+    return parse_date(value)
+
+
+def decimal_to_str(value):
+    if value is None:
+        return "0"
+    return str(value)
+
+
+def paginate_list(request, data):
+    """
+    Pagina una lista Python usando ?page= y ?page_size= de la request.
+    Devuelve un dict compatible con el formato que espera el frontend.
+    """
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = min(500, max(1, int(request.GET.get("page_size", 50))))
+    except (TypeError, ValueError):
+        page_size = 50
+
+    total = len(data)
+    start = (page - 1) * page_size
+    end   = start + page_size
+
+    return {
+        "count":   total,
+        "page":    page,
+        "page_size": page_size,
+        "results": data[start:end],
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def inventory_stock_report(request):
+    """
+    Stock actual por sucursal, bodega y producto.
+    """
+
+    qs = InventoryStock.objects.select_related(
+        "warehouse",
+        "warehouse__branch",
+        "product",
+        "product__category",
+        "product__unit",
+    ).all()
+
+    qs = apply_branch_scope(
+        qs,
+        request.user,
+        branch_field="warehouse__branch",
+    )
+
+    branch_uuid = request.GET.get("branch_uuid")
+    warehouse_uuid = request.GET.get("warehouse_uuid")
+    product_uuid = request.GET.get("product_uuid")
+    category_uuid = request.GET.get("category_uuid")
+
+    if branch_uuid:
+        qs = qs.filter(warehouse__branch__uuid=branch_uuid)
+
+    if warehouse_uuid:
+        qs = qs.filter(warehouse__uuid=warehouse_uuid)
+
+    if product_uuid:
+        qs = qs.filter(product__uuid=product_uuid)
+
+    if category_uuid:
+        qs = qs.filter(product__category__uuid=category_uuid)
+
+    data = []
+
+    for stock in qs.order_by("warehouse__branch__name", "warehouse__name", "product__name"):
+        data.append(
+            {
+                "branch_uuid": str(stock.warehouse.branch.uuid),
+                "branch_name": stock.warehouse.branch.name,
+                "warehouse_uuid": str(stock.warehouse.uuid),
+                "warehouse_name": stock.warehouse.name,
+                "product_uuid": str(stock.product.uuid),
+                "product_name": stock.product.name,
+                "product_internal_code": stock.product.internal_code,
+                "category_name": stock.product.category.name if stock.product.category else None,
+                "unit_code": stock.product.unit.code if stock.product.unit else None,
+                "quantity": decimal_to_str(stock.quantity),
+                "reserved_quantity": decimal_to_str(stock.reserved_quantity),
+                "available_quantity": decimal_to_str(stock.available_quantity),
+                "last_count_date": stock.last_count_date,
+            }
+        )
+
+    return api_response(
+        data=paginate_list(request, data),
+        message="Reporte de stock obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def inventory_movements_report(request):
+    """
+    Movimientos de inventario entre fechas.
+    """
+
+    qs = InventoryMovement.objects.select_related(
+        "warehouse_origin",
+        "warehouse_origin__branch",
+        "warehouse_destination",
+        "warehouse_destination__branch",
+        "product",
+        "lot",
+    ).all()
+
+    # Para movimientos con origen usamos scope por origen.
+    # Si luego quieres incluir movimientos sin origen pero con destino, lo ampliamos.
+    qs = apply_branch_scope(
+        qs,
+        request.user,
+        branch_field="warehouse_origin__branch",
+    )
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    movement_type = request.GET.get("movement_type")
+    product_uuid = request.GET.get("product_uuid")
+    warehouse_uuid = request.GET.get("warehouse_uuid")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    if movement_type:
+        qs = qs.filter(movement_type=movement_type)
+
+    if product_uuid:
+        qs = qs.filter(product__uuid=product_uuid)
+
+    if warehouse_uuid:
+        from django.db.models import Q
+        # Usar Q dentro del queryset ya filtrado por scope para no escapar el apply_branch_scope
+        qs = qs.filter(
+            Q(warehouse_origin__uuid=warehouse_uuid) |
+            Q(warehouse_destination__uuid=warehouse_uuid)
+        )
+
+    data = []
+
+    for movement in qs.order_by("-created_at"):
+        data.append(
+            {
+                "movement_uuid": str(movement.uuid),
+                "movement_type": movement.movement_type,
+                "created_at": movement.created_at,
+                "product_uuid": str(movement.product.uuid),
+                "product_name": movement.product.name,
+                "quantity": decimal_to_str(movement.quantity),
+                "warehouse_origin_uuid": str(movement.warehouse_origin.uuid) if movement.warehouse_origin else None,
+                "warehouse_origin_name": movement.warehouse_origin.name if movement.warehouse_origin else None,
+                "warehouse_destination_uuid": str(movement.warehouse_destination.uuid) if movement.warehouse_destination else None,
+                "warehouse_destination_name": movement.warehouse_destination.name if movement.warehouse_destination else None,
+                "lot_number": movement.lot.lot_number if movement.lot else None,
+                "reason": movement.reason,
+                "reference_type": movement.reference_type,
+                "reference_uuid": str(movement.reference_uuid) if movement.reference_uuid else None,
+            }
+        )
+
+    return api_response(
+        data=paginate_list(request, data),
+        message="Reporte de movimientos obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def purchases_report(request):
+    """
+    Compras / órdenes de compra entre fechas.
+    """
+
+    qs = PurchaseOrder.objects.select_related(
+        "supplier",
+        "legal_entity",
+        "branch",
+        "cost_center",
+        "requested_by",
+        "approved_by",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    supplier_uuid = request.GET.get("supplier_uuid")
+    branch_uuid = request.GET.get("branch_uuid")
+    status = request.GET.get("status")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    if supplier_uuid:
+        qs = qs.filter(supplier__uuid=supplier_uuid)
+
+    if branch_uuid:
+        qs = qs.filter(branch__uuid=branch_uuid)
+
+    if status:
+        qs = qs.filter(status=status)
+
+    data = []
+
+    for po in qs.order_by("-created_at"):
+        data.append(
+            {
+                "purchase_order_uuid": str(po.uuid),
+                "order_number": po.order_number,
+                "status": po.status,
+                "purchase_type": getattr(po, "purchase_type", None),
+                "supplier_uuid": str(po.supplier.uuid) if po.supplier else None,
+                "supplier_name": po.supplier.name if po.supplier else None,
+                "legal_entity_name": po.legal_entity.name if po.legal_entity else None,
+                "branch_name": po.branch.name if po.branch else None,
+                "cost_center_name": po.cost_center.name if po.cost_center else None,
+                "subtotal_amount": decimal_to_str(po.subtotal_amount),
+                "tax_amount": decimal_to_str(po.tax_amount),
+                "total_amount": decimal_to_str(po.total_amount),
+                "expected_delivery_date": po.expected_delivery_date,
+                "created_at": po.created_at,
+                "approved_at": po.approved_at,
+                "sent_at": po.sent_at,
+                "received_at": po.received_at,
+            }
+        )
+
+    totals = qs.aggregate(
+        subtotal=Sum("subtotal_amount"),
+        tax=Sum("tax_amount"),
+        total=Sum("total_amount"),
+    )
+
+    return api_response(
+        data={
+            **paginate_list(request, data),
+            "totals": {
+                "subtotal_amount": decimal_to_str(totals["subtotal"]),
+                "tax_amount":      decimal_to_str(totals["tax"]),
+                "total_amount":    decimal_to_str(totals["total"]),
+            },
+        },
+        message="Reporte de compras obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def supplier_spending_report(request):
+    """
+    Gasto agrupado por proveedor.
+    """
+
+    qs = PurchaseOrder.objects.select_related(
+        "supplier",
+        "branch",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    grouped = (
+        qs.values(
+            "supplier__uuid",
+            "supplier__name",
+            "supplier__rut",
+        )
+        .annotate(
+            purchase_orders_count=Count("id"),
+            total_amount=Sum("total_amount"),
+        )
+        .order_by("-total_amount")
+    )
+
+    data = []
+
+    for row in grouped:
+        data.append(
+            {
+                "supplier_uuid": str(row["supplier__uuid"]) if row["supplier__uuid"] else None,
+                "supplier_name": row["supplier__name"],
+                "supplier_rut": row["supplier__rut"],
+                "purchase_orders_count": row["purchase_orders_count"],
+                "total_amount": decimal_to_str(row["total_amount"]),
+            }
+        )
+
+    return api_response(
+        data=paginate_list(request, data),
+        message="Reporte de gasto por proveedor obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def branch_consumption_report(request):
+    """
+    Consumo por sucursal usando movimientos de egreso.
+    """
+
+    qs = InventoryMovement.objects.select_related(
+        "warehouse_origin",
+        "warehouse_origin__branch",
+        "product",
+    ).filter(
+        warehouse_origin__isnull=False,
+    )
+
+    qs = apply_branch_scope(
+        qs,
+        request.user,
+        branch_field="warehouse_origin__branch",
+    )
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    outgoing_types = [
+        InventoryMovement.TYPE_CONSUMPTION_OUT,
+        InventoryMovement.TYPE_ADJUSTMENT_OUT,
+        InventoryMovement.TYPE_BRANCH_LOAN,
+        InventoryMovement.TYPE_LOSS,
+        InventoryMovement.TYPE_EXPIRATION,
+    ]
+
+    qs = qs.filter(movement_type__in=outgoing_types)
+
+    grouped = (
+        qs.values(
+            "warehouse_origin__branch__uuid",
+            "warehouse_origin__branch__name",
+            "product__uuid",
+            "product__name",
+            "product__internal_code",
+        )
+        .annotate(
+            movements_count=Count("id"),
+            total_quantity=Sum("quantity"),
+        )
+        .order_by("warehouse_origin__branch__name", "product__name")
+    )
+
+    data = []
+
+    for row in grouped:
+        data.append(
+            {
+                "branch_uuid": str(row["warehouse_origin__branch__uuid"]),
+                "branch_name": row["warehouse_origin__branch__name"],
+                "product_uuid": str(row["product__uuid"]),
+                "product_name": row["product__name"],
+                "product_internal_code": row["product__internal_code"],
+                "movements_count": row["movements_count"],
+                "total_quantity": decimal_to_str(row["total_quantity"]),
+            }
+        )
+
+    return api_response(
+        data=paginate_list(request, data),
+        message="Reporte de consumo por sucursal obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def finance_summary_report(request):
+    """
+    Resumen financiero por razón social.
+    """
+
+    invoices_qs = SupplierInvoice.objects.select_related("legal_entity").all()
+    invoices_qs = apply_legal_entity_scope(
+        invoices_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    payments_qs = Payment.objects.select_related("legal_entity").all()
+    payments_qs = apply_legal_entity_scope(
+        payments_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    budgets_qs = Budget.objects.select_related("legal_entity").all()
+    budgets_qs = apply_legal_entity_scope(
+        budgets_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        invoices_qs = invoices_qs.filter(issue_date__gte=date_from)
+        payments_qs = payments_qs.filter(payment_date__gte=date_from)
+
+    if date_to:
+        invoices_qs = invoices_qs.filter(issue_date__lte=date_to)
+        payments_qs = payments_qs.filter(payment_date__lte=date_to)
+
+    invoices_grouped = invoices_qs.values(
+        "legal_entity__uuid",
+        "legal_entity__name",
+        "legal_entity__rut",
+    ).annotate(
+        invoices_count=Count("id"),
+        total_invoiced=Sum("total_amount"),
+    )
+
+    payments_grouped = payments_qs.values(
+        "legal_entity__uuid",
+    ).annotate(
+        payments_count=Count("id"),
+        total_paid=Sum("amount"),
+    )
+
+    budgets_grouped = budgets_qs.values(
+        "legal_entity__uuid",
+    ).annotate(
+        budget_total=Sum("budget_amount"),
+        budget_consumed=Sum("consumed_amount"),
+    )
+
+    payments_by_entity = {
+        str(row["legal_entity__uuid"]): row
+        for row in payments_grouped
+    }
+
+    budgets_by_entity = {
+        str(row["legal_entity__uuid"]): row
+        for row in budgets_grouped
+    }
+
+    data = []
+
+    for row in invoices_grouped:
+        entity_uuid = str(row["legal_entity__uuid"])
+        payment_row = payments_by_entity.get(entity_uuid, {})
+        budget_row = budgets_by_entity.get(entity_uuid, {})
+
+        data.append(
+            {
+                "legal_entity_uuid": entity_uuid,
+                "legal_entity_name": row["legal_entity__name"],
+                "legal_entity_rut": row["legal_entity__rut"],
+                "invoices_count": row["invoices_count"],
+                "total_invoiced": decimal_to_str(row["total_invoiced"]),
+                "payments_count": payment_row.get("payments_count", 0),
+                "total_paid": decimal_to_str(payment_row.get("total_paid")),
+                "budget_total": decimal_to_str(budget_row.get("budget_total")),
+                "budget_consumed": decimal_to_str(budget_row.get("budget_consumed")),
+            }
+        )
+
+    return api_response(
+        data=paginate_list(request, data),
+        message="Reporte financiero obtenido correctamente.",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def inventory_stock_export_csv(request):
+    qs = InventoryStock.objects.select_related(
+        "warehouse",
+        "warehouse__branch",
+        "product",
+        "product__category",
+        "product__unit",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="warehouse__branch")
+
+    branch_uuid = request.GET.get("branch_uuid")
+    warehouse_uuid = request.GET.get("warehouse_uuid")
+    product_uuid = request.GET.get("product_uuid")
+    category_uuid = request.GET.get("category_uuid")
+
+    if branch_uuid:
+        qs = qs.filter(warehouse__branch__uuid=branch_uuid)
+
+    if warehouse_uuid:
+        qs = qs.filter(warehouse__uuid=warehouse_uuid)
+
+    if product_uuid:
+        qs = qs.filter(product__uuid=product_uuid)
+
+    if category_uuid:
+        qs = qs.filter(product__category__uuid=category_uuid)
+
+    headers = [
+        "Sucursal",
+        "Bodega",
+        "Producto",
+        "Código interno",
+        "Categoría",
+        "Unidad",
+        "Cantidad",
+        "Reservado",
+        "Disponible",
+        "Último conteo",
+    ]
+
+    rows = []
+
+    for stock in qs.order_by("warehouse__branch__name", "warehouse__name", "product__name"):
+        rows.append(
+            [
+                stock.warehouse.branch.name,
+                stock.warehouse.name,
+                stock.product.name,
+                stock.product.internal_code or "",
+                stock.product.category.name if stock.product.category else "",
+                stock.product.unit.code if stock.product.unit else "",
+                stock.quantity,
+                stock.reserved_quantity,
+                stock.available_quantity,
+                stock.last_count_date or "",
+            ]
+        )
+
+    return csv_response("reporte_stock", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def inventory_movements_export_csv(request):
+    qs = InventoryMovement.objects.select_related(
+        "warehouse_origin",
+        "warehouse_origin__branch",
+        "warehouse_destination",
+        "warehouse_destination__branch",
+        "product",
+        "lot",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="warehouse_origin__branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    movement_type = request.GET.get("movement_type")
+    product_uuid = request.GET.get("product_uuid")
+    warehouse_uuid = request.GET.get("warehouse_uuid")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    if movement_type:
+        qs = qs.filter(movement_type=movement_type)
+
+    if product_uuid:
+        qs = qs.filter(product__uuid=product_uuid)
+
+    if warehouse_uuid:
+        from django.db.models import Q
+        qs = qs.filter(
+            Q(warehouse_origin__uuid=warehouse_uuid) |
+            Q(warehouse_destination__uuid=warehouse_uuid)
+        )
+
+    headers = [
+        "Fecha",
+        "Tipo movimiento",
+        "Producto",
+        "Cantidad",
+        "Bodega origen",
+        "Sucursal origen",
+        "Bodega destino",
+        "Sucursal destino",
+        "Lote",
+        "Motivo",
+        "Referencia tipo",
+        "Referencia UUID",
+    ]
+
+    rows = []
+
+    for movement in qs.order_by("-created_at"):
+        rows.append(
+            [
+                movement.created_at,
+                movement.movement_type,
+                movement.product.name,
+                movement.quantity,
+                movement.warehouse_origin.name if movement.warehouse_origin else "",
+                movement.warehouse_origin.branch.name if movement.warehouse_origin and movement.warehouse_origin.branch else "",
+                movement.warehouse_destination.name if movement.warehouse_destination else "",
+                movement.warehouse_destination.branch.name if movement.warehouse_destination and movement.warehouse_destination.branch else "",
+                movement.lot.lot_number if movement.lot else "",
+                movement.reason or "",
+                movement.reference_type or "",
+                movement.reference_uuid or "",
+            ]
+        )
+
+    return csv_response("reporte_movimientos_inventario", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def purchases_export_csv(request):
+    qs = PurchaseOrder.objects.select_related(
+        "supplier",
+        "legal_entity",
+        "branch",
+        "cost_center",
+        "requested_by",
+        "approved_by",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    supplier_uuid = request.GET.get("supplier_uuid")
+    branch_uuid = request.GET.get("branch_uuid")
+    status = request.GET.get("status")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    if supplier_uuid:
+        qs = qs.filter(supplier__uuid=supplier_uuid)
+
+    if branch_uuid:
+        qs = qs.filter(branch__uuid=branch_uuid)
+
+    if status:
+        qs = qs.filter(status=status)
+
+    headers = [
+        "Fecha creación",
+        "Número OC",
+        "Estado",
+        "Tipo compra",
+        "Proveedor",
+        "RUT proveedor",
+        "Razón social",
+        "Sucursal",
+        "Centro costo",
+        "Subtotal",
+        "IVA",
+        "Total",
+        "Fecha esperada entrega",
+        "Fecha aprobación",
+        "Fecha envío",
+        "Fecha recepción",
+    ]
+
+    rows = []
+
+    for po in qs.order_by("-created_at"):
+        rows.append(
+            [
+                po.created_at,
+                po.order_number,
+                po.status,
+                getattr(po, "purchase_type", "") or "",
+                po.supplier.name if po.supplier else "",
+                po.supplier.rut if po.supplier else "",
+                po.legal_entity.name if po.legal_entity else "",
+                po.branch.name if po.branch else "",
+                po.cost_center.name if po.cost_center else "",
+                po.subtotal_amount,
+                po.tax_amount,
+                po.total_amount,
+                po.expected_delivery_date or "",
+                po.approved_at or "",
+                po.sent_at or "",
+                po.received_at or "",
+            ]
+        )
+
+    return csv_response("reporte_compras", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def supplier_spending_export_csv(request):
+    qs = PurchaseOrder.objects.select_related(
+        "supplier",
+        "branch",
+    ).all()
+
+    qs = apply_branch_scope(qs, request.user, branch_field="branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    grouped = (
+        qs.values(
+            "supplier__uuid",
+            "supplier__name",
+            "supplier__rut",
+        )
+        .annotate(
+            purchase_orders_count=Count("id"),
+            total_amount=Sum("total_amount"),
+        )
+        .order_by("-total_amount")
+    )
+
+    headers = [
+        "Proveedor",
+        "RUT",
+        "Cantidad OC",
+        "Total comprado",
+    ]
+
+    rows = []
+
+    for row in grouped:
+        rows.append(
+            [
+                row["supplier__name"] or "",
+                row["supplier__rut"] or "",
+                row["purchase_orders_count"],
+                row["total_amount"] or 0,
+            ]
+        )
+
+    return csv_response("reporte_gasto_proveedor", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def branch_consumption_export_csv(request):
+    qs = InventoryMovement.objects.select_related(
+        "warehouse_origin",
+        "warehouse_origin__branch",
+        "product",
+    ).filter(
+        warehouse_origin__isnull=False,
+    )
+
+    qs = apply_branch_scope(qs, request.user, branch_field="warehouse_origin__branch")
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    outgoing_types = [
+        InventoryMovement.TYPE_CONSUMPTION_OUT,
+        InventoryMovement.TYPE_ADJUSTMENT_OUT,
+        InventoryMovement.TYPE_BRANCH_LOAN,
+        InventoryMovement.TYPE_LOSS,
+        InventoryMovement.TYPE_EXPIRATION,
+    ]
+
+    qs = qs.filter(movement_type__in=outgoing_types)
+
+    grouped = (
+        qs.values(
+            "warehouse_origin__branch__name",
+            "product__name",
+            "product__internal_code",
+        )
+        .annotate(
+            movements_count=Count("id"),
+            total_quantity=Sum("quantity"),
+        )
+        .order_by("warehouse_origin__branch__name", "product__name")
+    )
+
+    headers = [
+        "Sucursal",
+        "Producto",
+        "Código interno",
+        "Cantidad movimientos",
+        "Cantidad total consumida",
+    ]
+
+    rows = []
+
+    for row in grouped:
+        rows.append(
+            [
+                row["warehouse_origin__branch__name"] or "",
+                row["product__name"] or "",
+                row["product__internal_code"] or "",
+                row["movements_count"],
+                row["total_quantity"] or 0,
+            ]
+        )
+
+    return csv_response("reporte_consumo_sucursal", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def finance_summary_export_csv(request):
+    invoices_qs = SupplierInvoice.objects.select_related("legal_entity").all()
+    invoices_qs = apply_legal_entity_scope(
+        invoices_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    payments_qs = Payment.objects.select_related("legal_entity").all()
+    payments_qs = apply_legal_entity_scope(
+        payments_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    budgets_qs = Budget.objects.select_related("legal_entity").all()
+    budgets_qs = apply_legal_entity_scope(
+        budgets_qs,
+        request.user,
+        legal_entity_field="legal_entity",
+    )
+
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if date_from:
+        invoices_qs = invoices_qs.filter(issue_date__gte=date_from)
+        payments_qs = payments_qs.filter(payment_date__gte=date_from)
+
+    if date_to:
+        invoices_qs = invoices_qs.filter(issue_date__lte=date_to)
+        payments_qs = payments_qs.filter(payment_date__lte=date_to)
+
+    invoices_grouped = invoices_qs.values(
+        "legal_entity__uuid",
+        "legal_entity__name",
+        "legal_entity__rut",
+    ).annotate(
+        invoices_count=Count("id"),
+        total_invoiced=Sum("total_amount"),
+    )
+
+    payments_grouped = payments_qs.values(
+        "legal_entity__uuid",
+    ).annotate(
+        payments_count=Count("id"),
+        total_paid=Sum("amount"),
+    )
+
+    budgets_grouped = budgets_qs.values(
+        "legal_entity__uuid",
+    ).annotate(
+        budget_total=Sum("budget_amount"),
+        budget_consumed=Sum("consumed_amount"),
+    )
+
+    payments_by_entity = {
+        str(row["legal_entity__uuid"]): row
+        for row in payments_grouped
+    }
+
+    budgets_by_entity = {
+        str(row["legal_entity__uuid"]): row
+        for row in budgets_grouped
+    }
+
+    headers = [
+        "Razón social",
+        "RUT",
+        "Cantidad facturas",
+        "Total facturado",
+        "Cantidad pagos",
+        "Total pagado",
+        "Presupuesto total",
+        "Presupuesto consumido",
+    ]
+
+    rows = []
+
+    for row in invoices_grouped:
+        entity_uuid = str(row["legal_entity__uuid"])
+        payment_row = payments_by_entity.get(entity_uuid, {})
+        budget_row = budgets_by_entity.get(entity_uuid, {})
+
+        rows.append(
+            [
+                row["legal_entity__name"] or "",
+                row["legal_entity__rut"] or "",
+                row["invoices_count"],
+                row["total_invoiced"] or 0,
+                payment_row.get("payments_count", 0),
+                payment_row.get("total_paid", 0) or 0,
+                budget_row.get("budget_total", 0) or 0,
+                budget_row.get("budget_consumed", 0) or 0,
+            ]
+        )
+
+    return csv_response("reporte_financiero", headers, rows)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def stock_history_report(request):
+    """
+    Historial de comportamiento de stock por producto y bodega.
+
+    Calcula:
+    - entradas por día
+    - salidas por día
+    - consumo promedio diario
+    - días estimados hasta quiebre
+    - riesgo de quiebre
+    """
+
+    product_uuid = request.GET.get("product_uuid")
+    warehouse_uuid = request.GET.get("warehouse_uuid")
+    date_from = get_date_param(request, "date_from")
+    date_to = get_date_param(request, "date_to")
+
+    if not product_uuid:
+        return api_response(
+            data={"detail": "product_uuid es obligatorio."},
+            status_code=400,
+            status_text="error",
+            message="No se pudo obtener historial de stock.",
+        )
+
+    if not warehouse_uuid:
+        return api_response(
+            data={"detail": "warehouse_uuid es obligatorio."},
+            status_code=400,
+            status_text="error",
+            message="No se pudo obtener historial de stock.",
+        )
+
+    stock = (
+        InventoryStock.objects.select_related("warehouse", "warehouse__branch", "product")
+        .filter(product__uuid=product_uuid, warehouse__uuid=warehouse_uuid)
+        .first()
+    )
+
+    if not stock:
+        return api_response(
+            data={"detail": "No existe stock para el producto y bodega indicados."},
+            status_code=404,
+            status_text="error",
+            message="Stock no encontrado.",
+        )
+
+    scoped_stock_qs = apply_branch_scope(
+        InventoryStock.objects.filter(id=stock.id),
+        request.user,
+        branch_field="warehouse__branch",
+    )
+
+    if not scoped_stock_qs.exists():
+        return api_response(
+            data={"detail": "No tienes acceso a esta bodega."},
+            status_code=403,
+            status_text="error",
+            message="No autorizado.",
+        )
+
+    movements_qs = InventoryMovement.objects.select_related(
+        "warehouse_origin",
+        "warehouse_destination",
+        "product",
+    ).filter(product=stock.product)
+
+    movements_qs = movements_qs.filter(
+        warehouse_origin=stock.warehouse
+    ) | movements_qs.filter(
+        warehouse_destination=stock.warehouse
+    )
+
+    if date_from:
+        movements_qs = movements_qs.filter(created_at__date__gte=date_from)
+
+    if date_to:
+        movements_qs = movements_qs.filter(created_at__date__lte=date_to)
+
+    incoming_types = [
+        InventoryMovement.TYPE_PURCHASE_IN,
+        InventoryMovement.TYPE_ADJUSTMENT_IN,
+        InventoryMovement.TYPE_TRANSFER,
+        InventoryMovement.TYPE_BRANCH_LOAN_RETURN,
+    ]
+
+    outgoing_types = [
+        InventoryMovement.TYPE_CONSUMPTION_OUT,
+        InventoryMovement.TYPE_ADJUSTMENT_OUT,
+        InventoryMovement.TYPE_BRANCH_LOAN,
+        InventoryMovement.TYPE_LOSS,
+        InventoryMovement.TYPE_EXPIRATION,
+        InventoryMovement.TYPE_TRANSFER,
+    ]
+
+    grouped = {}
+
+    for movement in movements_qs.order_by("created_at"):
+        date_key = movement.created_at.date().isoformat()
+
+        if date_key not in grouped:
+            grouped[date_key] = {
+                "date": date_key,
+                "incoming": 0,
+                "outgoing": 0,
+                "net": 0,
+            }
+
+        quantity = float(movement.quantity or 0)
+
+        is_incoming = (
+            movement.movement_type in incoming_types
+            and movement.warehouse_destination_id == stock.warehouse_id
+        ) or (
+            movement.movement_type in incoming_types
+            and movement.warehouse_destination_id is None
+            and movement.warehouse_origin_id == stock.warehouse_id
+        )
+
+        is_outgoing = (
+            movement.movement_type in outgoing_types
+            and movement.warehouse_origin_id == stock.warehouse_id
+        )
+
+        if is_incoming:
+            grouped[date_key]["incoming"] += quantity
+            grouped[date_key]["net"] += quantity
+
+        if is_outgoing:
+            grouped[date_key]["outgoing"] += quantity
+            grouped[date_key]["net"] -= quantity
+
+    series = list(grouped.values())
+
+    total_outgoing = sum(item["outgoing"] for item in series)
+    days_with_data = len(series) or 1
+    average_daily_consumption = total_outgoing / days_with_data
+
+    current_available_stock = float(stock.available_quantity or 0)
+
+    if average_daily_consumption > 0:
+        estimated_days_until_stockout = current_available_stock / average_daily_consumption
+    else:
+        estimated_days_until_stockout = None
+
+    if estimated_days_until_stockout is None:
+        stockout_risk = "NO_DATA"
+    elif estimated_days_until_stockout <= 7:
+        stockout_risk = "HIGH"
+    elif estimated_days_until_stockout <= 15:
+        stockout_risk = "MEDIUM"
+    else:
+        stockout_risk = "LOW"
+
+    stock_breaks_count = 0
+    estimated_stock = current_available_stock
+
+    # Aproximación hacia atrás: detecta días donde el stock estimado habría llegado a cero.
+    for item in reversed(series):
+        estimated_stock = estimated_stock - item["net"]
+
+        if estimated_stock <= 0:
+            stock_breaks_count += 1
+
+    data = {
+        "product": {
+            "uuid": str(stock.product.uuid),
+            "name": stock.product.name,
+            "internal_code": stock.product.internal_code,
+        },
+        "warehouse": {
+            "uuid": str(stock.warehouse.uuid),
+            "name": stock.warehouse.name,
+            "branch_name": stock.warehouse.branch.name if stock.warehouse.branch else None,
+        },
+        "summary": {
+            "current_quantity": decimal_to_str(stock.quantity),
+            "reserved_quantity": decimal_to_str(stock.reserved_quantity),
+            "current_available_stock": decimal_to_str(stock.available_quantity),
+            "average_daily_consumption": str(round(average_daily_consumption, 2)),
+            "estimated_days_until_stockout": (
+                str(round(estimated_days_until_stockout, 2))
+                if estimated_days_until_stockout is not None
+                else None
+            ),
+            "stockout_risk": stockout_risk,
+            "stock_breaks_count": stock_breaks_count,
+        },
+        "series": series,
+    }
+
+    return api_response(
+        data=data,
+        message="Historial de stock obtenido correctamente.",
+    )
