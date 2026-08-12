@@ -179,9 +179,31 @@ class CanManageProducts(PermissionKeyRequired):
     write_key = "can_manage_products"
 
 
-class CanManageSuppliers(PermissionKeyRequired):
-    read_key  = "can_view_suppliers"
-    write_key = "can_manage_suppliers"
+class CanManageSuppliers(BasePermission):
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_suppliers"
+
+        elif request.method == "POST":
+            permission_key = "can_create_suppliers"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_suppliers"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_suppliers"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key
+        )
 
 
 class CanViewInventory(PermissionKeyRequired):
