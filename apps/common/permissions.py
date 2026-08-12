@@ -108,6 +108,7 @@ def user_has_permission_key(user, permission_key):
         "can_manage_organizations":   {"ADMIN","GERENTE"},
         "can_manage_catalogs":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
         "can_view_catalogs":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
+        "can_manage_products":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
         "can_manage_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
         "can_manage_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
         "can_manage_purchase_orders": {"ADMIN","GERENTE","ABASTECIMIENTO"},
@@ -168,6 +169,11 @@ class PermissionKeyRequired(BasePermission):
 class CanManageCatalogs(PermissionKeyRequired):
     read_key  = "can_view_catalogs"
     write_key = "can_manage_catalogs"
+
+
+class CanManageProducts(PermissionKeyRequired):
+    read_key  = "can_view_products"
+    write_key = "can_manage_products"
 
 
 class CanManageSuppliers(PermissionKeyRequired):

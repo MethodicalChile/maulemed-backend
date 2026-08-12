@@ -1,5 +1,5 @@
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import CanManageCatalogs
+from apps.common.permissions import CanManageCatalogs, CanManageProducts
 from apps.common.scopes import apply_branch_scope
 from django_filters import rest_framework as filters
 
@@ -36,10 +36,22 @@ class UnitOfMeasureViewSet(BaseModelViewSet):
 class ProductViewSet(BaseModelViewSet):
     queryset = Product.objects.select_related("category", "unit").all().order_by("name")
     serializer_class = ProductSerializer
-    permission_classes = [CanManageCatalogs]
+    permission_classes = [CanManageProducts]
 
     filterset_fields = [
         "category",
+        "unit",
+        "requires_lot",
+        "requires_expiration_date",
+        "requires_sanitary_resolution",
+        "is_medication",
+        "is_controlled",
+        "is_active",
+    ]
+    search_fields = ["name", "description", "sku", "barcode", "internal_code"]
+    ordering_fields = ["name", "sku", "internal_code", "created_at", "updated_at"]
+    ordering = ["name"]
+
         "unit",
         "requires_lot",
         "requires_expiration_date",
