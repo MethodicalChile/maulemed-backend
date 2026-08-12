@@ -53,15 +53,15 @@ def user_has_permission_key(user, permission_key):
         "can_edit_organizations":     {"ADMIN","GERENTE"},
         "can_delete_organizations":   {"ADMIN"},
         # Productos
-        "can_view_products":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
-        "can_create_products":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_edit_products":          {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_delete_products":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_view_products":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR", "ROL_PRUEBA"},
+        "can_create_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_edit_products":          {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_delete_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
         # Proveedores
-        "can_view_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS"},
-        "can_create_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_edit_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_delete_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_view_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS", "ROL_PRUEBA"},
+        "can_create_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_edit_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_delete_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
         # Inventario
         "can_view_inventory":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
         "can_create_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
@@ -108,7 +108,7 @@ def user_has_permission_key(user, permission_key):
         "can_manage_organizations":   {"ADMIN","GERENTE"},
         "can_manage_catalogs":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
         "can_view_catalogs":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
-        "can_manage_products":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_manage_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
         "can_manage_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
         "can_manage_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
         "can_manage_purchase_orders": {"ADMIN","GERENTE","ABASTECIMIENTO"},
@@ -119,12 +119,15 @@ def user_has_permission_key(user, permission_key):
 
     for code in role_codes:
         if code in saved:
+            print(f"DEBUG: code {code} in saved, permissions: {saved[code]}")
             if permission_key in saved[code]:
                 return True
         else:
+            print(f"DEBUG: code {code} NOT in saved, checking defaults for {permission_key}")
             if code in DEFAULTS.get(permission_key, set()):
                 return True
 
+    print(f"DEBUG: returning False for permission_key {permission_key}")
     return False
 
 

@@ -52,20 +52,6 @@ class ProductViewSet(BaseModelViewSet):
     ordering_fields = ["name", "sku", "internal_code", "created_at", "updated_at"]
     ordering = ["name"]
 
-        "unit",
-        "requires_lot",
-        "requires_expiration_date",
-        "requires_sanitary_resolution",
-        "is_medication",
-        "is_controlled",
-        "is_active",
-    ]
-    search_fields = ["name", "description", "sku", "barcode", "internal_code"]
-    ordering_fields = ["name", "sku", "internal_code", "created_at", "updated_at"]
-    ordering = ["name"]
-
-
-from django_filters import rest_framework as filters
 
 class BranchProductFilter(filters.FilterSet):
     branch = filters.UUIDFilter(field_name="branch__uuid")
@@ -73,7 +59,7 @@ class BranchProductFilter(filters.FilterSet):
 
     class Meta:
         model = BranchProduct
-        fields = ["branch", "product", "cost_center", "is_active"]
+        fields = ["branch", "product", "cost_center"]
 
 
 class BranchProductViewSet(BaseModelViewSet):

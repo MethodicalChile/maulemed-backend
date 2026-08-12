@@ -19,6 +19,7 @@ class ProductCategory(BaseModel):
 class UnitOfMeasure(BaseModel):
     code = models.CharField(max_length=30, unique=True)
     name = models.CharField(max_length=80)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         db_table = "units_of_measure"
@@ -51,9 +52,8 @@ class Product(BaseModel):
     requires_sanitary_resolution = models.BooleanField(default=False)
     is_medication = models.BooleanField(default=False)
     is_controlled = models.BooleanField(default=False)
-    quality_rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
-
     is_active = models.BooleanField(default=True)
+    quality_rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     class Meta:
         db_table = "products"
@@ -85,8 +85,6 @@ class BranchProduct(BaseModel):
     max_stock = models.DecimalField(max_digits=14, decimal_places=3, blank=True, null=True)
     critical_stock = models.DecimalField(max_digits=14, decimal_places=3, default=0)
     usual_monthly_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
-
-    is_active = models.BooleanField(default=True)
 
     class Meta:
         db_table = "branch_products"

@@ -71,7 +71,6 @@ class ProductSmallSerializer(serializers.ModelSerializer):
             "requires_expiration_date",
             "is_medication",
             "is_controlled",
-            "is_active",
             "quality_rating",
         ]
 
@@ -98,6 +97,7 @@ class UnitOfMeasureSerializer(serializers.ModelSerializer):
             "id",
             "deleted_at",
         ]
+
 
 
 class ProductSerializer(serializers.ModelSerializer):
