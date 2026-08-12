@@ -51,6 +51,7 @@ class Product(BaseModel):
     requires_sanitary_resolution = models.BooleanField(default=False)
     is_medication = models.BooleanField(default=False)
     is_controlled = models.BooleanField(default=False)
+    quality_rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     is_active = models.BooleanField(default=True)
 

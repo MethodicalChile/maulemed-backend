@@ -8,6 +8,7 @@ from drf_spectacular.views import (
 )
 
 from apps.common.health import health, health_db
+from apps.common.views import ChatView
 
 
 urlpatterns = [
@@ -35,4 +36,5 @@ urlpatterns = [
 
     path("api/health/", health, name="health"),
     path("api/health/db/", health_db, name="health-db"),
+    path("api/chat/", ChatView.as_view(), name="chat"),
 ]

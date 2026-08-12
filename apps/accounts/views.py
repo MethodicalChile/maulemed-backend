@@ -187,11 +187,11 @@ class UserManagementViewSet(ViewSet):
         except User.DoesNotExist:
             return api_error(message="Usuario no encontrado.", status_code=404)
         if user == request.user:
-            return api_error(message="No puedes desactivarte a ti mismo.", status_code=400)
-        user.is_active = False
-        user.save(update_fields=["is_active"])
-        logger.info(f"Usuario desactivado: {user.username} por admin={request.user.username}")
-        return api_response(message="Usuario desactivado correctamente.")
+            return api_error(message="No puedes eliminarte a ti mismo.", status_code=400)
+        
+        user.delete()
+        logger.info(f"Usuario eliminado: {user.username} por admin={request.user.username}")
+        return api_response(message="Usuario eliminado correctamente.")
 
     @action(detail=True, methods=["post"], url_path="set_password")
     def set_password(self, request, pk=None):

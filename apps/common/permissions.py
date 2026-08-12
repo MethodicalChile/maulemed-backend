@@ -236,3 +236,8 @@ class CanManageDocuments(PermissionKeyRequired):
 class CanViewAudit(PermissionKeyRequired):
     read_key  = "can_view_audit"
     write_key = "can_view_audit"
+
+
+class CanManageOrganizations(PermissionKeyRequired):
+    read_key  = "can_view_organizations"
+    write_key = "can_manage_organizations"

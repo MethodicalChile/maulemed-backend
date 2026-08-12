@@ -20,3 +20,4 @@ python-decouple
 djangorestframework
 django-cors-headers==4.6.0
 supabase==2.31.0
+google-generativeai==0.8.4

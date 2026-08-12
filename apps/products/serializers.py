@@ -72,6 +72,7 @@ class ProductSmallSerializer(serializers.ModelSerializer):
             "is_medication",
             "is_controlled",
             "is_active",
+            "quality_rating",
         ]
 
     def get_image_url(self, product):

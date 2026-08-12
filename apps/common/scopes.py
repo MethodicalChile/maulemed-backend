@@ -41,16 +41,29 @@ def get_user_scope_ids(user):
     organization_ids = []
     legal_entity_ids = []
     branch_ids = []
+    
+    # Check for "Global" scope (where IDs are null)
+    is_global_scope = False
 
     for assignment in assignments:
         if assignment.organization_id:
             organization_ids.append(assignment.organization_id)
-
+        else:
+            is_global_scope = True
+            
         if assignment.legal_entity_id:
             legal_entity_ids.append(assignment.legal_entity_id)
 
         if assignment.branch_id:
             branch_ids.append(assignment.branch_id)
+
+    if is_global_scope:
+        return {
+            "is_global": True,
+            "organization_ids": [],
+            "legal_entity_ids": [],
+            "branch_ids": [],
+        }
 
     return {
         "is_global": False,

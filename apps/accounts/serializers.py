@@ -27,7 +27,7 @@ class UUIDRelatedField(serializers.Field):
         return str(value.uuid) if value else None
 
     def to_internal_value(self, data):
-        if not data:
+        if not data or data == "":
             return None
         try:
             return self.model.objects.get(uuid=data)
@@ -213,7 +213,13 @@ class UserRoleAssignmentSerializer(serializers.ModelSerializer):
         )
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
-        if qs.exists():
+        
+        # Si estamos editando y los datos son iguales a los actuales, no debería fallar la validación
+        if self.instance and qs.exists():
+            raise serializers.ValidationError(
+                "Ya existe una asignación de rol para este usuario con el mismo alcance."
+            )
+        elif not self.instance and qs.exists():
             raise serializers.ValidationError(
                 "Ya existe una asignación de rol para este usuario con el mismo alcance."
             )
