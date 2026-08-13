@@ -380,11 +380,16 @@ def role_permissions_matrix(request):
         "can_create_suppliers":           ADMIN_GER_ABAST,
         "can_edit_suppliers":             ADMIN_GER_ABAST,
         "can_delete_suppliers":           ADMIN_GER_ABAST,
-        # Inventario
+        # Inventario - movimientos
         "can_view_inventory":             INV_READERS,
         "can_create_inventory":           INV_WRITERS,
         "can_edit_inventory":             INV_WRITERS,
         "can_delete_inventory":           ADMIN_GER_ABAST,
+        # Inventario - bodegas
+        "can_view_warehouses":            INV_READERS,
+        "can_create_warehouses":          INV_WRITERS,
+        "can_edit_warehouses":            INV_WRITERS,
+        "can_delete_warehouses":          ADMIN_GER_ABAST,
         # Compras — Solicitudes
         "can_view_supply_requests":       CATALOG_READERS,
         "can_create_supply_request":      PURCHASE_REQERS,
@@ -454,11 +459,17 @@ def role_permissions_matrix(request):
             {"action": "Editar",  "key": "can_edit_suppliers"},
             {"action": "Eliminar","key": "can_delete_suppliers"},
         ]},
-        {"module": "Inventario", "key": "inventory", "permissions": [
-            {"action": "Ver",                  "key": "can_view_inventory"},
-            {"action": "Registrar movimientos","key": "can_create_inventory"},
-            {"action": "Editar movimientos",   "key": "can_edit_inventory"},
-            {"action": "Eliminar movimientos", "key": "can_delete_inventory"},
+        {"module": "Inventario — Movimientos", "key": "inventory", "permissions": [
+            {"action": "Ver movimientos",       "key": "can_view_inventory"},
+            {"action": "Registrar movimientos", "key": "can_create_inventory"},
+            {"action": "Editar movimientos",    "key": "can_edit_inventory"},
+            {"action": "Eliminar movimientos",  "key": "can_delete_inventory"},
+        ]},
+        {"module": "Inventario — Bodegas", "key": "warehouses", "permissions": [
+            {"action": "Ver bodegas",      "key": "can_view_warehouses"},
+            {"action": "Crear bodega",     "key": "can_create_warehouses"},
+            {"action": "Editar bodega",    "key": "can_edit_warehouses"},
+            {"action": "Eliminar bodega",  "key": "can_delete_warehouses"},
         ]},
         {"module": "Compras — Solicitudes", "key": "supply_requests", "permissions": [
             {"action": "Ver solicitudes",    "key": "can_view_supply_requests"},
@@ -694,6 +705,10 @@ def me(request):
         "can_create_inventory":       user_has_perm("can_create_inventory"),
         "can_edit_inventory":         user_has_perm("can_edit_inventory"),
         "can_delete_inventory":       user_has_perm("can_delete_inventory"),
+        "can_view_warehouses":        user_has_perm("can_view_warehouses"),
+        "can_create_warehouses":      user_has_perm("can_create_warehouses"),
+        "can_edit_warehouses":        user_has_perm("can_edit_warehouses"),
+        "can_delete_warehouses":      user_has_perm("can_delete_warehouses"),
         # Compras
         "can_view_supply_requests":   user_has_perm("can_view_supply_requests"),
         "can_create_supply_request":  user_has_perm("can_create_supply_request"),
@@ -754,7 +769,15 @@ def me(request):
         {"key": "organizations", "label": "Organización",  "path": "/organizations", "visible": user_has_perm("can_view_organizations")},
         {"key": "products",      "label": "Productos",     "path": "/products",      "visible": user_has_perm("can_view_products")},
         {"key": "suppliers",     "label": "Proveedores",   "path": "/suppliers",     "visible": user_has_perm("can_view_suppliers")},
-        {"key": "inventory",     "label": "Inventario",    "path": "/inventory",     "visible": user_has_perm("can_view_inventory")},
+        {
+            "key": "inventory",
+            "label": "Inventario",
+            "path": "/inventory",
+            "visible": (
+                user_has_perm("can_view_inventory")
+                or user_has_perm("can_view_warehouses")
+            ),
+        },
         {"key": "purchasing",    "label": "Compras",       "path": "/purchasing",    "visible": user_has_perm("can_view_supply_requests") or user_has_perm("can_view_purchase_orders")},
         {"key": "transfers",     "label": "Traspasos",     "path": "/transfers",     "visible": user_has_perm("can_view_transfers")},
         {"key": "finance",       "label": "Finanzas",      "path": "/finance",       "visible": user_has_perm("can_view_finance")},

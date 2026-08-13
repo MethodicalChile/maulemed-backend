@@ -62,11 +62,17 @@ def user_has_permission_key(user, permission_key):
         "can_create_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
         "can_edit_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
         "can_delete_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        # Inventario
+        # Inventario — Movimientos
         "can_view_inventory":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
         "can_create_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
         "can_edit_inventory":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
         "can_delete_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
+
+        # Inventario — Bodegas
+        "can_view_warehouses":        {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
+        "can_create_warehouses":      {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL"},
+        "can_edit_warehouses":        {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL"},
+        "can_delete_warehouses":      {"ADMIN","GERENTE","ABASTECIMIENTO"},
         # Compras — solicitudes
         "can_view_supply_requests":   {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA"},
         "can_create_supply_request":  {"ADMIN","GERENTE","ABASTECIMIENTO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA"},
@@ -211,11 +217,58 @@ class CanViewInventory(PermissionKeyRequired):
     write_key = "can_view_inventory"
 
 
-class CanManageInventory(PermissionKeyRequired):
-    read_key  = "can_view_inventory"
-    write_key = "can_manage_inventory"
+class CanManageInventory(BasePermission):
 
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
 
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_inventory"
+
+        elif request.method == "POST":
+            permission_key = "can_create_inventory"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_inventory"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_inventory"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key
+        )
+
+class CanManageWarehouses(BasePermission):
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_warehouses"
+
+        elif request.method == "POST":
+            permission_key = "can_create_warehouses"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_warehouses"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_warehouses"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key
+        )
+    
 class CanCreateSupplyRequest(PermissionKeyRequired):
     read_key  = "can_create_supply_request"
     write_key = "can_create_supply_request"
