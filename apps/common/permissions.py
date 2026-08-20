@@ -46,7 +46,7 @@ def user_has_permission_key(user, permission_key):
 
     # Defaults del sistema para roles no configurados — granulares
     DEFAULTS = {
-        "can_view_dashboard":         set(role_codes),
+        "can_view_dashboard": {"ADMIN", "GERENTE"},
         # Organización
         "can_view_organizations":     {"ADMIN","GERENTE"},
         "can_create_organizations":   {"ADMIN","GERENTE"},
@@ -95,7 +95,7 @@ def user_has_permission_key(user, permission_key):
         "can_edit_finance":           {"ADMIN","GERENTE","FINANZAS"},
         "can_delete_finance":         {"ADMIN","GERENTE"},
         # Evaluaciones
-        "can_view_evaluations":       set(role_codes),
+        "can_view_evaluations":       {"ADMIN","GERENTE"},
         "can_create_evaluations":     {"ADMIN","GERENTE"},
         "can_edit_evaluations":       {"ADMIN","GERENTE"},
         "can_delete_evaluations":     {"ADMIN"},
@@ -136,7 +136,65 @@ def user_has_permission_key(user, permission_key):
     print(f"DEBUG: returning False for permission_key {permission_key}")
     return False
 
+class CanManageEvaluationQuestions(BasePermission):
+    """
+    Permisos CRUD para preguntas de Evaluaciones.
 
+    GET / HEAD / OPTIONS
+        -> can_view_evaluations
+
+    POST
+        -> can_create_evaluations
+
+    PUT / PATCH
+        -> can_edit_evaluations
+
+    DELETE
+        -> can_delete_evaluations
+    """
+
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = (
+                "can_view_evaluations"
+            )
+
+        elif request.method == "POST":
+            permission_key = (
+                "can_create_evaluations"
+            )
+
+        elif request.method in (
+            "PUT",
+            "PATCH",
+        ):
+            permission_key = (
+                "can_edit_evaluations"
+            )
+
+        elif request.method == "DELETE":
+            permission_key = (
+                "can_delete_evaluations"
+            )
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+    
 class HasAnyRole(BasePermission):
     allowed_roles = []
 
@@ -286,36 +344,417 @@ class CanManagePurchasing(PermissionKeyRequired):
     # para las acciones específicas. A nivel ViewSet basta con can_create_supply_request.
     write_key = "can_create_supply_request"
 
+class CanAccessSupplyRequests(BasePermission):
+    """
+    Solicitudes de compra.
+
+    GET/HEAD/OPTIONS -> can_view_supply_requests
+    POST             -> can_create_supply_request
+    PUT/PATCH        -> can_edit_supply_request
+    DELETE           -> no permitido actualmente
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_supply_requests"
+
+        elif request.method == "POST":
+            permission_key = "can_create_supply_request"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_supply_request"
+
+        elif request.method == "DELETE":
+            return False
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+
+
+class CanAccessPurchaseOrders(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_purchase_orders"
+
+        elif request.method == "POST":
+            permission_key = "can_create_purchase_orders"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_purchase_orders"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_purchase_orders"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+    
+class CanManageEvaluations(BasePermission):
+    """
+    Permisos granulares del módulo Evaluaciones.
+    """
+
+    VIEW_ACTIONS = {
+        "list",
+        "retrieve",
+        "questions",
+        "qr",
+        "responses_summary",
+    }
+
+    CREATE_ACTIONS = {
+        "create",
+    }
+
+    EDIT_ACTIONS = {
+        "update",
+        "partial_update",
+        "toggle_active",
+        "publish_google_form",
+        "resync_google_form",
+        "sync_responses",
+    }
+
+    DELETE_ACTIONS = {
+        "destroy",
+    }
+
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
+
+        action = getattr(
+            view,
+            "action",
+            None,
+        )
+
+        if action in self.VIEW_ACTIONS:
+            permission_key = (
+                "can_view_evaluations"
+            )
+
+        elif action in self.CREATE_ACTIONS:
+            permission_key = (
+                "can_create_evaluations"
+            )
+
+        elif action in self.EDIT_ACTIONS:
+            permission_key = (
+                "can_edit_evaluations"
+            )
+
+        elif action in self.DELETE_ACTIONS:
+            permission_key = (
+                "can_delete_evaluations"
+            )
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+
+class CanAccessPurchaseReceipts(BasePermission):
+    """
+    Permisos granulares para Recepciones de compra.
+
+    GET / HEAD / OPTIONS
+        -> can_view_purchase_receipts
+
+    POST
+        -> can_create_purchase_receipts
+
+    PUT / PATCH
+        -> can_edit_purchase_receipts
+
+    DELETE
+        -> can_delete_purchase_receipts
+    """
+
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = (
+                "can_view_purchase_receipts"
+            )
+
+        elif request.method == "POST":
+            permission_key = (
+                "can_create_purchase_receipts"
+            )
+
+        elif request.method in (
+            "PUT",
+            "PATCH",
+        ):
+            permission_key = (
+                "can_edit_purchase_receipts"
+            )
+
+        elif request.method == "DELETE":
+            permission_key = (
+                "can_delete_purchase_receipts"
+            )
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+    
+class CanAccessSupplierClaims(BasePermission):
+    """
+    Permisos granulares para Reclamos de proveedores.
+
+    GET / HEAD / OPTIONS
+        -> can_view_supplier_claims
+
+    POST
+        -> can_create_supplier_claims
+
+    PUT / PATCH
+        -> can_edit_supplier_claims
+
+    DELETE
+        -> can_delete_supplier_claims
+    """
+
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = (
+                "can_view_supplier_claims"
+            )
+
+        elif request.method == "POST":
+            permission_key = (
+                "can_create_supplier_claims"
+            )
+
+        elif request.method in (
+            "PUT",
+            "PATCH",
+        ):
+            permission_key = (
+                "can_edit_supplier_claims"
+            )
+
+        elif request.method == "DELETE":
+            permission_key = (
+                "can_delete_supplier_claims"
+            )
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+
+class CanProcessPurchaseReceipt(BasePermission):
+    """
+    Permiso específico para procesar
+    una recepción de compra.
+    """
+
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            "can_process_purchase_receipts",
+        )
 
 class CanApprovePurchaseOrder(PermissionKeyRequired):
     read_key  = "can_manage_purchase_orders"
     write_key = "can_manage_purchase_orders"
 
 
-class CanReceivePurchase(PermissionKeyRequired):
-    read_key  = "can_receive_purchase"
-    write_key = "can_receive_purchase"
+class CanManageTransfers(BasePermission):
+    """
+    Permisos granulares para el CRUD principal de Traspasos.
+
+    GET / HEAD / OPTIONS
+        -> can_view_transfers
+
+    POST
+        -> can_create_transfers
+
+    PUT / PATCH
+        -> can_edit_transfers
+
+    DELETE
+        -> can_delete_transfers
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_transfers"
+
+        elif request.method == "POST":
+            permission_key = "can_create_transfers"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_transfers"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_transfers"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
 
 
-class CanManageTransfers(PermissionKeyRequired):
-    read_key  = "can_manage_transfers"
-    write_key = "can_manage_transfers"
+class CanApproveTransfer(BasePermission):
+    """
+    Permiso para acciones de flujo que modifican un traspaso.
+
+    Ejemplos:
+    - aprobar
+    - rechazar
+    - enviar
+    - recibir
+    - cerrar
+
+    Todas estas operaciones requieren:
+        can_edit_transfers
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            "can_edit_transfers",
+        )
 
 
-class CanApproveTransfer(PermissionKeyRequired):
-    read_key  = "can_manage_transfers"
-    write_key = "can_manage_transfers"
+class CanManageFinance(BasePermission):
+    """
+    Permisos granulares para el módulo de Finanzas.
+
+    GET / HEAD / OPTIONS
+        -> can_view_finance
+
+    POST
+        -> can_create_finance
+
+    PUT / PATCH
+        -> can_edit_finance
+
+    DELETE
+        -> can_delete_finance
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_finance"
+
+        elif request.method == "POST":
+            permission_key = "can_create_finance"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_finance"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_finance"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
 
 
-class CanManageFinance(PermissionKeyRequired):
-    read_key  = "can_manage_finance"
-    write_key = "can_manage_finance"
+class CanManageDocuments(BasePermission):
+    """
+    Permiso para acceder y utilizar
+    la funcionalidad de carga/análisis
+    de documentos.
+    """
 
+    def has_permission(
+        self,
+        request,
+        view,
+    ):
+        if (
+            not request.user
+            or not request.user.is_authenticated
+        ):
+            return False
 
-class CanManageDocuments(PermissionKeyRequired):
-    read_key  = "can_manage_inventory"
-    write_key = "can_manage_inventory"
-
+        return user_has_permission_key(
+            request.user,
+            "can_access_document_preview",
+        )
 
 class CanViewAudit(PermissionKeyRequired):
     read_key  = "can_view_audit"

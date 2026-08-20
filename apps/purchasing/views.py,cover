@@ -61,7 +61,7 @@
 >         "approved_by",
 >     ).prefetch_related("items").all()
 >     serializer_class = SupplyRequestSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "branch",
@@ -298,7 +298,7 @@
 >         "product",
 >     ).all()
 >     serializer_class = SupplyRequestItemSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "supply_request",
@@ -337,7 +337,7 @@
 >         "approved_by",
 >     ).prefetch_related("items").all()
 >     serializer_class = PurchaseOrderSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "supplier",
@@ -488,7 +488,7 @@
 >         "product",
 >     ).all()
 >     serializer_class = PurchaseOrderItemSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "purchase_order",
@@ -523,7 +523,7 @@
 >         "received_by",
 >     ).prefetch_related("items").all()
 >     serializer_class = PurchaseReceiptSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "purchase_order",
@@ -600,7 +600,7 @@
 >         "product",
 >     ).all()
 >     serializer_class = PurchaseReceiptItemSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "purchase_receipt",
@@ -637,7 +637,7 @@
 >         "created_by",
 >     ).all()
 >     serializer_class = SupplierClaimSerializer
->     permission_classes = [CanManagePurchasing]
+>     permission_classes = [CanAccessSupplyRequests]
   
 >     filterset_fields = [
 >         "purchase_receipt",

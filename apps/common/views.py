@@ -4,7 +4,7 @@ from rest_framework import status
 from django.conf import settings
 import google.generativeai as genai
 import logging
-from apps.common.services.chat_context import get_product_context
+from apps.common.services.chat_context import get_chat_context
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +18,16 @@ class ChatView(APIView):
             genai.configure(api_key=settings.API_KEY_GEMINI)
             model_name = 'gemini-3.1-flash-lite'
             
-            # Obtener contexto de la BD
-            db_context = get_product_context()
+            # Obtener contexto dinámico de la BD basado en permisos
+            db_context = get_chat_context(request.user)
             
             system_instruction = f"""
             Eres un asistente virtual amable y profesional de MauleMed. Tu objetivo es ayudar a los usuarios con consultas sobre la plataforma, procesos internos y dudas generales de manera clara y concisa.
             
-            Contexto de la base de datos:
+            Contexto de datos disponible para el usuario actual:
             {db_context}
             
-            Responde siempre en español basándote en este contexto si es relevante para la pregunta.
+            Responde siempre en español basándote en este contexto si es relevante para la pregunta. Si la información no está en el contexto, indica que no tienes acceso a ella o que no está disponible.
             """
             
             model = genai.GenerativeModel(
@@ -37,9 +37,6 @@ class ChatView(APIView):
             
             # Obtener historial de la petición (si existe)
             history = request.data.get('history', [])
-            
-            # Convertir historial a formato compatible con Google Generative AI si es necesario
-            # A veces el historial enviado desde el frontend requiere ajuste.
             
             chat = model.start_chat(history=history)
             
