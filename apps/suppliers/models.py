@@ -6,7 +6,7 @@ from apps.products.models import Product
 
 class Supplier(BaseModel):
     name = models.CharField(max_length=180)
-    rut = models.CharField(max_length=20, unique=True, blank=True, null=True)
+    rut = models.CharField(max_length=20, blank=True, null=True)
     contact_name = models.CharField(max_length=150, blank=True, null=True)
     email = models.EmailField(max_length=180, blank=True, null=True)
     phone = models.CharField(max_length=50, blank=True, null=True)

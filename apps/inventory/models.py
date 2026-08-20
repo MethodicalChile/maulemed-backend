@@ -68,6 +68,9 @@ class InventoryStock(BaseModel):
     quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
     reserved_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
 
+    min_level = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+    max_level = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+
     last_count_date = models.DateField(blank=True, null=True)
 
     class Meta:

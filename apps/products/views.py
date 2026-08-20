@@ -1,5 +1,5 @@
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import CanManageCatalogs
+from apps.common.permissions import CanManageCatalogs, CanManageProducts
 from apps.common.scopes import apply_branch_scope
 from django_filters import rest_framework as filters
 
@@ -36,7 +36,7 @@ class UnitOfMeasureViewSet(BaseModelViewSet):
 class ProductViewSet(BaseModelViewSet):
     queryset = Product.objects.select_related("category", "unit").all().order_by("name")
     serializer_class = ProductSerializer
-    permission_classes = [CanManageCatalogs]
+    permission_classes = [CanManageProducts]
 
     filterset_fields = [
         "category",
@@ -53,15 +53,13 @@ class ProductViewSet(BaseModelViewSet):
     ordering = ["name"]
 
 
-from django_filters import rest_framework as filters
-
 class BranchProductFilter(filters.FilterSet):
     branch = filters.UUIDFilter(field_name="branch__uuid")
     product = filters.UUIDFilter(field_name="product__uuid")
 
     class Meta:
         model = BranchProduct
-        fields = ["branch", "product", "cost_center", "is_active"]
+        fields = ["branch", "product", "cost_center"]
 
 
 class BranchProductViewSet(BaseModelViewSet):
