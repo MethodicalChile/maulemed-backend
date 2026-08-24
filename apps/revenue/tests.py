@@ -480,3 +480,354 @@ class ImportarReporteRealTests(TestCase):
             RevenueEntry.objects.values("appointment_ref").distinct().count()
         )
         self.assertEqual(citas, 31)
+
+
+# ---------------------------------------------------------------------------
+# D2 · Cuentas por cobrar institucionales
+# ---------------------------------------------------------------------------
+
+DETALLE_CAJA_PDF = REPORTES_DIR / "detalle caja.pdf"
+
+
+class ReceivablesTests(TestCase):
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = make_superuser("recadmin", "recpass")
+        self.client.force_authenticate(user=self.admin)
+
+        self.org, self.sociedades = setup_sociedades()
+        self.financiadores = setup_financiadores()
+
+        from apps.revenue.services.import_reporte import import_records
+
+        import_records(
+            [
+                {
+                    "id": "1",
+                    "date": "2026-07-10",
+                    "provider": "IRAMA",
+                    "financier": "FONASA N3",
+                    "value": 100000,
+                    "discount": 0,
+                    "procedure_code": "A",
+                },
+                {
+                    "id": "2",
+                    "date": "2026-07-11",
+                    "provider": "IRAMA",
+                    "financier": "FONASA N3",
+                    "value": 50000,
+                    "discount": 0,
+                    "procedure_code": "B",
+                },
+                {
+                    "id": "3",
+                    "date": "2026-07-12",
+                    "provider": "IRAMA",
+                    "financier": "PARTICULAR",
+                    "value": 70000,
+                    "discount": 0,
+                    "procedure_code": "C",
+                },
+            ],
+            file_name="reporte.xlsx",
+        )
+
+    def test_el_particular_no_genera_deuda(self):
+        """El paciente particular paga en el mesón y ahí se acaba."""
+        from apps.revenue.models import AccountReceivable
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        build_receivables_from_revenue(period_year=2026, period_month=7)
+
+        self.assertEqual(AccountReceivable.objects.count(), 1)
+
+        cuenta = AccountReceivable.objects.get()
+        self.assertEqual(cuenta.financier, self.financiadores["FONASA-N3"])
+        self.assertEqual(cuenta.billed_amount, Decimal("150000"))
+
+    def test_la_cuenta_queda_ligada_a_las_prestaciones_que_cobra(self):
+        """
+        Es lo que desagrega la factura cruzada aunque no pueda emitirse
+        separada.
+        """
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        cuentas = build_receivables_from_revenue(period_year=2026, period_month=7)
+        cuenta = cuentas[0]
+
+        self.assertEqual(cuenta.items.count(), 2)
+        self.assertEqual(
+            sum(i.amount for i in cuenta.items.all()), Decimal("150000")
+        )
+
+    def test_reconstruir_no_borra_lo_ya_cobrado(self):
+        from apps.revenue.services.receivables import (
+            build_receivables_from_revenue,
+            register_collection,
+        )
+
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+        register_collection(receivable=cuenta, amount=Decimal("60000"))
+
+        build_receivables_from_revenue(period_year=2026, period_month=7)
+
+        cuenta.refresh_from_db()
+        self.assertEqual(cuenta.collected_amount, Decimal("60000"))
+        self.assertEqual(cuenta.pending_amount, Decimal("90000"))
+        self.assertEqual(cuenta.status, cuenta.STATUS_PARTIAL)
+
+    def test_reconstruir_no_duplica_los_items(self):
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        build_receivables_from_revenue(period_year=2026, period_month=7)
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+
+        self.assertEqual(cuenta.items.count(), 2)
+
+    def test_cobro_total_cierra_la_cuenta(self):
+        from apps.revenue.services.receivables import (
+            build_receivables_from_revenue,
+            register_collection,
+        )
+
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+        register_collection(receivable=cuenta, amount=Decimal("150000"))
+
+        self.assertEqual(cuenta.status, cuenta.STATUS_COLLECTED)
+        self.assertEqual(cuenta.pending_amount, Decimal("0"))
+
+    def test_tramos_de_antiguedad(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from apps.revenue.models import AccountReceivable
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+
+        hoy = timezone.localdate()
+
+        cuenta.due_date = hoy - timedelta(days=45)
+        cuenta.save()
+        self.assertEqual(cuenta.aging_bucket, "31-60")
+
+        cuenta.due_date = hoy + timedelta(days=10)
+        cuenta.save()
+        self.assertEqual(cuenta.aging_bucket, "Sin vencer")
+
+        cuenta.due_date = hoy - timedelta(days=200)
+        cuenta.save()
+        self.assertEqual(cuenta.aging_bucket, "90+")
+
+    def test_deuda_sin_fecha_no_se_esconde_en_un_tramo(self):
+        """
+        "Sin fecha" es deuda que nadie sabe cuándo debía cobrarse. Meterla en
+        un tramo la haría desaparecer del análisis.
+        """
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+
+        self.assertIsNone(cuenta.due_date)
+        self.assertEqual(cuenta.aging_bucket, "Sin fecha")
+
+    def test_endpoint_aging_agrupa_por_financiador(self):
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        build_receivables_from_revenue(period_year=2026, period_month=7)
+
+        resp = self.client.get("/api/receivables/aging/")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        filas = resp.json()["data"]
+
+        self.assertEqual(len(filas), 1)
+        self.assertEqual(Decimal(str(filas[0]["total_pending"])), Decimal("150000"))
+
+    def test_endpoint_rebuild_exige_periodo(self):
+        resp = self.client.post("/api/receivables/rebuild/", {}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_endpoint_register_collection_rechaza_monto_no_positivo(self):
+        from apps.revenue.services.receivables import build_receivables_from_revenue
+
+        cuenta = build_receivables_from_revenue(
+            period_year=2026, period_month=7
+        )[0]
+
+        resp = self.client.post(
+            f"/api/receivables/{cuenta.uuid}/register-collection/",
+            {"amount": "0"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class CashCollectionTests(TestCase):
+
+    def setUp(self):
+        self.org, self.sociedades = setup_sociedades()
+
+    def test_rut_se_compara_normalizado(self):
+        """
+        El informe trae "76.869.710-8" y la ficha guarda "76869710-8". Sin
+        normalizar, ninguna sociedad se resolvería.
+        """
+        from apps.revenue.services.import_depositos import resolve_legal_entity
+
+        entidad = resolve_legal_entity(rut="76.869.710-8")
+
+        self.assertEqual(entidad, self.sociedades["IRAL"])
+
+    def test_fila_de_totales_no_se_carga_como_sociedad(self):
+        from apps.revenue.models import CashCollection
+        from apps.revenue.services.import_depositos import import_providers
+        from datetime import date
+
+        providers = [
+            {
+                "rut": "76.869.710-8",
+                "name": "Instituto Radiológico Linares Ltda.",
+                "totals": {"particular": 108800, "copay": 0, "total": 108800},
+                "payments": [
+                    {"payment_method": "EFECTIVO", "total": 108800},
+                ],
+            },
+            {"rut": None, "name": "TOTAL", "totals": {"total": 108800}},
+        ]
+
+        import_providers(providers, collection_date=date(2026, 7, 24))
+
+        self.assertEqual(CashCollection.objects.count(), 1)
+
+    def test_recargar_el_mismo_dia_actualiza_en_vez_de_duplicar(self):
+        from apps.revenue.models import CashCollection
+        from apps.revenue.services.import_depositos import import_providers
+        from datetime import date
+
+        providers = [
+            {
+                "rut": "76.869.710-8",
+                "name": "IRAL",
+                "totals": {"particular": 100000, "copay": 0, "total": 100000},
+                "payments": [],
+            }
+        ]
+        import_providers(providers, collection_date=date(2026, 7, 24))
+
+        providers[0]["totals"]["total"] = 120000
+        import_providers(providers, collection_date=date(2026, 7, 24))
+
+        self.assertEqual(CashCollection.objects.count(), 1)
+        self.assertEqual(
+            CashCollection.objects.get().total_amount, Decimal("120000")
+        )
+
+
+class ImportarDepositosRealTests(TestCase):
+    """Carga el informe de depósitos real y contrasta con el análisis."""
+
+    def setUp(self):
+        if not DETALLE_CAJA_PDF.exists():
+            self.skipTest(f"No está {DETALLE_CAJA_PDF}")
+
+        self.org = Organization.objects.create(name="MauleMed", is_active=True)
+
+        # Las seis sociedades del informe del 24-07, con sus RUT reales.
+        self.ruts = {
+            "76792250-7": "Soc. Médica y de Diagnóstico Nova Imagen Ltda.",
+            "76480670-0": "Soc. Médica Maule Sur S.A.",
+            "76212446-7": "Imágenes Médicas Cauquenes SpA",
+            "76551640-4": "Soc. Médica y de Diagnóstico Maule Ltda.",
+            "76067669-1": "Densitometría Ósea Linares Ltda.",
+            "76869710-8": "Instituto Radiológico Linares Ltda.",
+        }
+        for rut, nombre in self.ruts.items():
+            LegalEntity.objects.create(
+                organization=self.org, name=nombre, rut=rut
+            )
+
+    def _importar(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from apps.revenue.services.import_depositos import (
+            import_providers,
+            parse_uploaded_depositos,
+        )
+
+        subido = SimpleUploadedFile(
+            "DETALLE-CAJA.pdf",
+            DETALLE_CAJA_PDF.read_bytes(),
+            content_type="application/pdf",
+        )
+        providers, fecha, _ = parse_uploaded_depositos(subido)
+        return import_providers(providers, collection_date=fecha), fecha
+
+    def test_carga_las_seis_sociedades_por_3050736(self):
+        from apps.revenue.models import CashCollection
+        from datetime import date
+
+        creadas, fecha = self._importar()
+
+        self.assertEqual(fecha, date(2026, 7, 24))
+        self.assertEqual(len(creadas), 6)
+
+        total = sum(c.total_amount for c in CashCollection.objects.all())
+        self.assertEqual(total, Decimal("3050736"))
+
+    def test_el_copago_es_la_mayor_parte_de_la_caja(self):
+        """
+        $1.877.736 de copago sobre $3.050.736: el 61,6 % de la recaudación
+        tiene detrás una cuenta por cobrar institucional que hoy no se ve.
+        """
+        from apps.revenue.models import CashCollection
+
+        self._importar()
+
+        copago = sum(c.copay_amount for c in CashCollection.objects.all())
+        particular = sum(
+            c.particular_amount for c in CashCollection.objects.all()
+        )
+
+        self.assertEqual(copago, Decimal("1877736"))
+        self.assertEqual(particular, Decimal("1173000"))
+
+    def test_el_cheque_no_es_medio_de_cobro(self):
+        """
+        "Los pagos los realizamos todos con cheque. No hacemos transferencia."
+        El cheque es el medio de pago a proveedores, por eso nunca aparece en
+        la recaudación.
+        """
+        from apps.revenue.models import CashCollection
+
+        self._importar()
+
+        cheques = sum(c.check_amount for c in CashCollection.objects.all())
+        self.assertEqual(cheques, Decimal("0"))
+
+    def test_sociedad_repetida_en_dos_bloques_se_suma(self):
+        """
+        Maule Sur figura dos veces en el informe del 24-07, por $832.416 y
+        $113.680, porque el documento abre por punto de recaudación sin nombrar
+        la sucursal. Guardarlos uno por uno con la misma clave hacía que el
+        segundo pisara al primero: la caja del día perdía $596.816 en silencio.
+        """
+        from apps.revenue.models import CashCollection
+
+        self._importar()
+
+        maule_sur = LegalEntity.objects.get(rut="76480670-0")
+        collection = CashCollection.objects.get(legal_entity=maule_sur)
+
+        self.assertEqual(collection.total_amount, Decimal("946096"))
+        self.assertEqual(collection.copay_amount, Decimal("673496"))

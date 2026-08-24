@@ -6,6 +6,8 @@ from .views import (
     FinancierAliasViewSet,
     RevenueEntryViewSet,
     RevenueImportBatchViewSet,
+    CashCollectionViewSet,
+    AccountReceivableViewSet,
 )
 
 
@@ -14,6 +16,8 @@ router.register("financiers", FinancierViewSet, basename="financiers")
 router.register("financier-aliases", FinancierAliasViewSet, basename="financier-aliases")
 router.register("revenue-entries", RevenueEntryViewSet, basename="revenue-entries")
 router.register("revenue-imports", RevenueImportBatchViewSet, basename="revenue-imports")
+router.register("cash-collections", CashCollectionViewSet, basename="cash-collections")
+router.register("receivables", AccountReceivableViewSet, basename="receivables")
 
 
 urlpatterns = [

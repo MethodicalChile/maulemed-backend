@@ -7,12 +7,16 @@ from apps.common.responses import api_response
 from apps.common.scopes import apply_legal_entity_scope
 
 from .models import (
+    AccountReceivable,
+    CashCollection,
     Financier,
     FinancierAlias,
     RevenueEntry,
     RevenueImportBatch,
 )
 from .serializers import (
+    AccountReceivableSerializer,
+    CashCollectionSerializer,
     FinancierSerializer,
     FinancierAliasSerializer,
     RevenueEntrySerializer,
@@ -194,4 +198,190 @@ class RevenueImportBatchViewSet(BaseModelViewSet):
         return api_response(
             data=self.get_serializer(batch).data,
             message=mensaje,
+        )
+
+
+class CashCollectionViewSet(BaseModelViewSet):
+    """Recaudación diaria por sociedad — lo percibido."""
+
+    queryset = CashCollection.objects.select_related(
+        "legal_entity", "branch"
+    ).all()
+
+    serializer_class = CashCollectionSerializer
+    permission_classes = [CanManageFinance]
+
+    filterset_fields = ["legal_entity", "branch", "collection_date"]
+    search_fields = ["legal_entity__name"]
+    ordering_fields = ["collection_date", "total_amount"]
+    ordering = ["-collection_date"]
+
+    def get_queryset(self):
+        return apply_legal_entity_scope(
+            super().get_queryset(),
+            self.request.user,
+            legal_entity_field="legal_entity",
+        )
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_file(self, request):
+        from .services.import_depositos import (
+            analyze_providers,
+            import_providers,
+            parse_uploaded_depositos,
+        )
+
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="Debes enviar un archivo en el campo 'file'.",
+            )
+
+        providers, fecha, file_name = parse_uploaded_depositos(uploaded_file)
+
+        if fecha is None:
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="No se pudo determinar la fecha del informe.",
+            )
+
+        analisis = analyze_providers(providers)
+        creadas = import_providers(providers, collection_date=fecha)
+
+        mensaje = f"Se cargaron {len(creadas)} sociedades del {fecha}."
+        if analisis["unmapped_providers"]:
+            mensaje += (
+                f" {len(analisis['unmapped_providers'])} no se pudieron "
+                "resolver: revisa el RUT en la ficha o crea el alias."
+            )
+
+        return api_response(
+            data={
+                "file_name": file_name,
+                "collection_date": str(fecha),
+                "imported": len(creadas),
+                **analisis,
+            },
+            message=mensaje,
+        )
+
+
+class AccountReceivableViewSet(BaseModelViewSet):
+    """
+    Deuda institucional por financiador.
+
+    Es el puente entre lo devengado y lo percibido, que hoy no existe: la única
+    fuente de ingresos registra lo devengado y el flujo se construye sobre lo
+    percibido.
+    """
+
+    queryset = AccountReceivable.objects.select_related(
+        "legal_entity", "financier"
+    ).all()
+
+    serializer_class = AccountReceivableSerializer
+    permission_classes = [CanManageFinance]
+
+    filterset_fields = [
+        "legal_entity",
+        "financier",
+        "financier__financier_type",
+        "period_year",
+        "period_month",
+        "status",
+    ]
+    search_fields = ["financier__name", "document_number", "notes"]
+    ordering_fields = ["period_year", "period_month", "billed_amount"]
+    ordering = ["-period_year", "-period_month"]
+
+    def get_queryset(self):
+        return apply_legal_entity_scope(
+            super().get_queryset(),
+            self.request.user,
+            legal_entity_field="legal_entity",
+        )
+
+    @action(detail=False, methods=["get"])
+    def aging(self, request):
+        """Antigüedad de la deuda por financiador, en tramos de 30 días."""
+        from .services.receivables import aging_report
+
+        filas = aging_report(self.filter_queryset(self.get_queryset()))
+
+        return api_response(
+            data=filas,
+            message="Antigüedad de la cobranza obtenida correctamente.",
+        )
+
+    @action(detail=False, methods=["post"], url_path="rebuild")
+    def rebuild(self, request):
+        """
+        Reconstruye las cuentas del período desde el libro de ingresos.
+
+        No toca lo ya cobrado: volver a correrlo tras una carga nueva no borra
+        el trabajo de cobranza.
+        """
+        from .services.receivables import build_receivables_from_revenue
+
+        try:
+            period_year = int(request.data.get("period_year"))
+            period_month = int(request.data.get("period_month"))
+        except (TypeError, ValueError):
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="Indica period_year y period_month.",
+            )
+
+        creadas = build_receivables_from_revenue(
+            period_year=period_year,
+            period_month=period_month,
+        )
+
+        return api_response(
+            data=self.get_serializer(creadas, many=True).data,
+            message=f"Se actualizaron {len(creadas)} cuentas por cobrar.",
+        )
+
+    @action(detail=True, methods=["post"], url_path="register-collection")
+    def register_collection_action(self, request, uuid=None):
+        from decimal import Decimal, InvalidOperation
+
+        from .services.receivables import register_collection
+
+        instance = self.get_object()
+
+        try:
+            amount = Decimal(str(request.data.get("amount")))
+        except (InvalidOperation, TypeError):
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="Indica un monto válido.",
+            )
+
+        if amount <= 0:
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="El monto cobrado debe ser mayor a cero.",
+            )
+
+        register_collection(
+            receivable=instance,
+            amount=amount,
+            notes=request.data.get("notes"),
+        )
+
+        return api_response(
+            data=self.get_serializer(instance).data,
+            message="Cobro registrado correctamente.",
         )

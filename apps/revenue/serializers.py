@@ -6,6 +6,9 @@ from apps.organizations.serializers import (
 )
 
 from .models import (
+    AccountReceivable,
+    AccountReceivableItem,
+    CashCollection,
     Financier,
     FinancierAlias,
     RevenueEntry,
@@ -58,4 +61,46 @@ class RevenueImportBatchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = RevenueImportBatch
+        exclude = ["id", "deleted_at"]
+
+
+class CashCollectionSerializer(serializers.ModelSerializer):
+    legal_entity_detail = LegalEntitySmallSerializer(
+        source="legal_entity", read_only=True
+    )
+    branch_detail = BranchSmallSerializer(source="branch", read_only=True)
+    card_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = CashCollection
+        exclude = ["id", "deleted_at"]
+
+
+class AccountReceivableItemSerializer(serializers.ModelSerializer):
+    revenue_entry_detail = RevenueEntrySerializer(
+        source="revenue_entry", read_only=True
+    )
+
+    class Meta:
+        model = AccountReceivableItem
+        exclude = ["id", "deleted_at"]
+
+
+class AccountReceivableSerializer(serializers.ModelSerializer):
+    legal_entity_detail = LegalEntitySmallSerializer(
+        source="legal_entity", read_only=True
+    )
+    financier_detail = FinancierSmallSerializer(source="financier", read_only=True)
+
+    pending_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+    aging_days = serializers.IntegerField(read_only=True)
+    aging_bucket = serializers.CharField(read_only=True)
+    item_count = serializers.IntegerField(source="items.count", read_only=True)
+
+    class Meta:
+        model = AccountReceivable
         exclude = ["id", "deleted_at"]

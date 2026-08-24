@@ -276,3 +276,240 @@ class RevenueEntry(BaseModel):
 
     def __str__(self):
         return f"{self.service_date} - {self.legal_entity} - {self.net_amount}"
+
+
+class CashCollection(BaseModel):
+    """
+    Lo percibido: la recaudación de una jornada por sociedad.
+
+    Sale del informe de depósitos, que es el único documento que ya viene
+    abierto por razón social. Es la contraparte de RevenueEntry: aquella
+    registra lo devengado al atender, ésta lo que efectivamente entró.
+    """
+
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.PROTECT,
+        related_name="cash_collections",
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        related_name="cash_collections",
+        blank=True,
+        null=True,
+        help_text="Vacío cuando el informe consolida varias sucursales.",
+    )
+
+    collection_date = models.DateField()
+
+    # El copago es la parte que paga el paciente con previsión; su contraparte
+    # es la bonificación que queda por cobrar al financiador. En la muestra
+    # analizada el copago fue el 61,6 % de la caja del día.
+    particular_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    copay_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    withdrawal_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    cash_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    debit_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    credit_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    check_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    source_document = models.ForeignKey(
+        "documents.Document",
+        on_delete=models.SET_NULL,
+        related_name="cash_collections",
+        blank=True,
+        null=True,
+    )
+
+    class Meta:
+        db_table = "cash_collections"
+        verbose_name = "Cash Collection"
+        verbose_name_plural = "Cash Collections"
+        ordering = ["-collection_date"]
+        indexes = [
+            models.Index(
+                fields=["legal_entity", "collection_date"],
+                name="idx_collection_entity_date",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["legal_entity", "branch", "collection_date"],
+                name="uq_cash_collection_day",
+            ),
+        ]
+
+    @property
+    def card_amount(self):
+        """Débito más crédito: lo que llega con comisión y desfase de abono."""
+        return (self.debit_amount or 0) + (self.credit_amount or 0)
+
+    def __str__(self):
+        return f"{self.collection_date} - {self.legal_entity} - {self.total_amount}"
+
+
+class AccountReceivable(BaseModel):
+    """
+    Deuda de un financiador institucional con una sociedad.
+
+    Es la funcionalidad que hace visible la contraparte institucional del
+    copago. Hoy no aparece en ningún reporte pese a ser la contraparte de la
+    mayor parte de la recaudación diaria.
+    """
+
+    STATUS_OPEN = "PENDIENTE"
+    STATUS_PARTIAL = "PARCIAL"
+    STATUS_COLLECTED = "COBRADA"
+    STATUS_WRITTEN_OFF = "CASTIGADA"
+
+    STATUS_CHOICES = [
+        (STATUS_OPEN, "Pendiente"),
+        (STATUS_PARTIAL, "Cobro parcial"),
+        (STATUS_COLLECTED, "Cobrada"),
+        (STATUS_WRITTEN_OFF, "Castigada"),
+    ]
+
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.PROTECT,
+        related_name="receivables",
+    )
+    financier = models.ForeignKey(
+        Financier,
+        on_delete=models.PROTECT,
+        related_name="receivables",
+    )
+
+    period_year = models.IntegerField()
+    period_month = models.IntegerField()
+
+    document_number = models.CharField(max_length=100, blank=True, null=True)
+    issue_date = models.DateField(blank=True, null=True)
+    due_date = models.DateField(blank=True, null=True)
+
+    billed_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    collected_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    status = models.CharField(
+        max_length=40,
+        choices=STATUS_CHOICES,
+        default=STATUS_OPEN,
+    )
+
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "accounts_receivable"
+        verbose_name = "Account Receivable"
+        verbose_name_plural = "Accounts Receivable"
+        ordering = ["-period_year", "-period_month"]
+        indexes = [
+            models.Index(
+                fields=["legal_entity", "financier"],
+                name="idx_receivable_entity_fin",
+            ),
+            models.Index(fields=["status"], name="idx_receivable_status"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(period_month__gte=1) & models.Q(period_month__lte=12),
+                name="chk_receivable_month",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "legal_entity",
+                    "financier",
+                    "period_year",
+                    "period_month",
+                ],
+                name="uq_receivable_period",
+            ),
+        ]
+
+    @property
+    def pending_amount(self):
+        return (self.billed_amount or 0) - (self.collected_amount or 0)
+
+    @property
+    def aging_days(self):
+        """Días desde el vencimiento. None si no hay fecha comprometida."""
+        from django.utils import timezone
+
+        if self.due_date is None:
+            return None
+        return (timezone.localdate() - self.due_date).days
+
+    @property
+    def aging_bucket(self):
+        """
+        Tramo de antigüedad. "Sin vencer" y "Sin fecha" son distintos: la
+        segunda es deuda que nadie sabe cuándo debía cobrarse, y esconderla
+        dentro de un tramo la haría desaparecer del análisis.
+        """
+        if self.pending_amount <= 0:
+            return "Sin deuda"
+
+        dias = self.aging_days
+        if dias is None:
+            return "Sin fecha"
+        if dias <= 0:
+            return "Sin vencer"
+        if dias <= 30:
+            return "1-30"
+        if dias <= 60:
+            return "31-60"
+        if dias <= 90:
+            return "61-90"
+        return "90+"
+
+    def recalculate_status(self):
+        if self.collected_amount <= 0:
+            self.status = self.STATUS_OPEN
+        elif self.pending_amount <= 0:
+            self.status = self.STATUS_COLLECTED
+        else:
+            self.status = self.STATUS_PARTIAL
+        return self.status
+
+    def __str__(self):
+        return f"{self.financier} → {self.legal_entity} ({self.period_month}/{self.period_year})"
+
+
+class AccountReceivableItem(BaseModel):
+    """
+    Las prestaciones que cobra una cuenta por cobrar.
+
+    Es lo que permite desagregar la factura cruzada aunque no pueda emitirse
+    separada: una factura puede incluir varias sociedades y sucursales, y con
+    bono electrónico llega una sola liquidación por todas.
+    """
+
+    account_receivable = models.ForeignKey(
+        AccountReceivable,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    revenue_entry = models.ForeignKey(
+        RevenueEntry,
+        on_delete=models.CASCADE,
+        related_name="receivable_items",
+    )
+
+    amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "accounts_receivable_items"
+        verbose_name = "Account Receivable Item"
+        verbose_name_plural = "Account Receivable Items"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["account_receivable", "revenue_entry"],
+                name="uq_receivable_item",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.account_receivable} - {self.amount}"
