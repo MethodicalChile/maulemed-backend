@@ -12,7 +12,47 @@ from apps.products.serializers import ProductCategorySmallSerializer
 from apps.suppliers.serializers import SupplierSmallSerializer
 from apps.purchasing.serializers import PurchaseOrderSmallSerializer
 
-from .models import SupplierInvoice, Payment, Budget, BudgetCategory
+from .models import (
+    SupplierInvoice,
+    SupplierInvoiceItem,
+    Payment,
+    Budget,
+    BudgetCategory,
+)
+
+
+class SupplierInvoiceItemSerializer(serializers.ModelSerializer):
+    product_detail = serializers.SerializerMethodField()
+    cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
+    category_detail = ProductCategorySmallSerializer(source="category", read_only=True)
+
+    class Meta:
+        model = SupplierInvoiceItem
+        exclude = ["id", "deleted_at"]
+        read_only_fields = ["total_amount"]
+
+    def get_product_detail(self, obj):
+        if obj.product is None:
+            return None
+        from apps.products.serializers import ProductSmallSerializer
+
+        return ProductSmallSerializer(obj.product).data
+
+    def validate(self, attrs):
+        product = attrs.get("product") or (
+            self.instance and getattr(self.instance, "product", None)
+        )
+        description = attrs.get("description") or (
+            self.instance and getattr(self.instance, "description", None)
+        )
+
+        # Un ítem sin producto ni descripción no se puede leer en un reporte.
+        if product is None and not description:
+            raise serializers.ValidationError(
+                "Indica un producto o una descripción para el ítem."
+            )
+
+        return attrs
 
 
 class SupplierInvoiceSmallSerializer(serializers.ModelSerializer):
@@ -29,10 +69,27 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
     branch_detail = BranchSmallSerializer(source="branch", read_only=True)
     cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
     purchase_order_detail = PurchaseOrderSmallSerializer(source="purchase_order", read_only=True)
+    items = SupplierInvoiceItemSerializer(many=True, read_only=True)
+    items_total_amount = serializers.SerializerMethodField()
+    items_match_total = serializers.SerializerMethodField()
 
     class Meta:
         model = SupplierInvoice
         exclude = ["id", "deleted_at"]
+
+    def _items_check(self, obj):
+        from .services import invoice_items_match_total
+
+        return invoice_items_match_total(obj)
+
+    def get_items_total_amount(self, obj):
+        return self._items_check(obj)[1]
+
+    def get_items_match_total(self, obj):
+        # None cuando no hay detalle: no es que no cuadre, es que no se detalló.
+        if not obj.items.exists():
+            return None
+        return self._items_check(obj)[0]
 
 
 class PaymentSerializer(serializers.ModelSerializer):

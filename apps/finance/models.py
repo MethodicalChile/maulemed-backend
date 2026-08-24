@@ -117,6 +117,103 @@ class SupplierInvoice(BaseModel):
         return f"{supplier_name} - {self.invoice_number}"
 
 
+class SupplierInvoiceItem(BaseModel):
+    """
+    Detalle de la factura de proveedor.
+
+    La cabecera ya llevaba razón social, sucursal y centro de costo, pero una
+    factura que mezcla ítems de dos centros de costo quedaba atribuida entera a
+    uno solo. Eso es justo el filtrado manual que la Jefatura pidió eliminar:
+    "que las facturas de compra también se pudiesen ir registrando y ojalá
+    filtrando por ítem en forma automática".
+
+    Resuelve la carencia del sistema contable —que no está separado por centro
+    de costo— sin tocar la contabilidad.
+    """
+
+    supplier_invoice = models.ForeignKey(
+        SupplierInvoice,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT,
+        related_name="supplier_invoice_items",
+        blank=True,
+        null=True,
+        help_text="Vacío para gastos sin producto de catálogo.",
+    )
+    description = models.CharField(max_length=255, blank=True, null=True)
+
+    category = models.ForeignKey(
+        ProductCategory,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoice_items",
+        blank=True,
+        null=True,
+    )
+    cost_center = models.ForeignKey(
+        CostCenter,
+        on_delete=models.SET_NULL,
+        related_name="supplier_invoice_items",
+        blank=True,
+        null=True,
+    )
+    budget_category = models.ForeignKey(
+        "finance.BudgetCategory",
+        on_delete=models.PROTECT,
+        related_name="supplier_invoice_items",
+        blank=True,
+        null=True,
+    )
+
+    quantity = models.DecimalField(max_digits=14, decimal_places=3, default=1)
+    unit_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    net_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "supplier_invoice_items"
+        verbose_name = "Supplier Invoice Item"
+        verbose_name_plural = "Supplier Invoice Items"
+        indexes = [
+            models.Index(
+                fields=["supplier_invoice"], name="idx_invoice_item_invoice"
+            ),
+            models.Index(
+                fields=["cost_center"], name="idx_invoice_item_cost_center"
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(quantity__gt=0),
+                name="chk_invoice_item_quantity_positive",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        # El total del ítem se deriva y no se pide: dejarlo editable a mano
+        # abriría la puerta a que el detalle no sume la factura.
+        if not self.net_amount:
+            self.net_amount = (self.quantity or 0) * (self.unit_price or 0)
+
+        self.total_amount = (self.net_amount or 0) + (self.tax_amount or 0)
+
+        # Heredar la categoría del producto cuando no se indicó otra.
+        if self.category_id is None and self.product_id is not None:
+            self.category_id = self.product.category_id
+
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        etiqueta = self.description or (self.product.name if self.product else "Ítem")
+        return f"{self.supplier_invoice.invoice_number} - {etiqueta}"
+
+
 class Payment(BaseModel):
     METHOD_TRANSFER = "TRANSFERENCIA"
     METHOD_CHECK = "CHEQUE"

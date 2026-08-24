@@ -1,13 +1,23 @@
+from rest_framework.decorators import action
+
 from apps.common.viewsets import BaseModelViewSet
+from apps.common.responses import api_response
 from apps.common.permissions import CanManageFinance
 from apps.common.scopes import apply_legal_entity_scope
 
-from .models import SupplierInvoice, Payment, Budget, BudgetCategory
+from .models import (
+    SupplierInvoice,
+    SupplierInvoiceItem,
+    Payment,
+    Budget,
+    BudgetCategory,
+)
 from .serializers import (
     SupplierInvoiceSerializer,
     PaymentSerializer,
     BudgetSerializer,
     BudgetCategorySerializer,
+    SupplierInvoiceItemSerializer,
 )
 
 
@@ -18,7 +28,7 @@ class SupplierInvoiceViewSet(BaseModelViewSet):
         "branch",
         "cost_center",
         "purchase_order",
-    ).all()
+    ).prefetch_related("items__cost_center", "items__category").all()
 
     serializer_class = SupplierInvoiceSerializer
     permission_classes = [CanManageFinance]
@@ -65,6 +75,41 @@ class SupplierInvoiceViewSet(BaseModelViewSet):
             qs,
             self.request.user,
             legal_entity_field="legal_entity",
+        )
+
+    @action(detail=True, methods=["post"], url_path="prefill-items")
+    def prefill_items(self, request, uuid=None):
+        """
+        Precarga el detalle desde la orden de compra que originó la factura.
+
+        Quien registra corrige los ítems que van a otro centro de costo, en vez
+        de tipear el detalle completo.
+        """
+        from .services import build_items_from_purchase_order
+
+        instance = self.get_object()
+
+        if instance.purchase_order is None:
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="La factura no proviene de una orden de compra.",
+            )
+
+        if instance.items.exists():
+            return api_response(
+                data=None,
+                status_code=400,
+                status_text="error",
+                message="La factura ya tiene detalle cargado.",
+            )
+
+        creados = build_items_from_purchase_order(instance)
+
+        return api_response(
+            data=self.get_serializer(instance).data,
+            message=f"Se precargaron {len(creados)} ítems desde la orden.",
         )
 
     def perform_create(self, serializer):
@@ -202,4 +247,36 @@ class BudgetViewSet(BaseModelViewSet):
             qs,
             self.request.user,
             legal_entity_field="legal_entity",
+        )
+
+class SupplierInvoiceItemViewSet(BaseModelViewSet):
+    queryset = SupplierInvoiceItem.objects.select_related(
+        "supplier_invoice",
+        "product",
+        "category",
+        "cost_center",
+        "budget_category",
+    ).all()
+
+    serializer_class = SupplierInvoiceItemSerializer
+    permission_classes = [CanManageFinance]
+
+    filterset_fields = [
+        "supplier_invoice",
+        "product",
+        "category",
+        "cost_center",
+        "budget_category",
+    ]
+    search_fields = ["description", "product__name", "supplier_invoice__invoice_number"]
+    ordering_fields = ["created_at", "total_amount"]
+    ordering = ["created_at"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+
+        return apply_legal_entity_scope(
+            qs,
+            self.request.user,
+            legal_entity_field="supplier_invoice__legal_entity",
         )

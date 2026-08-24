@@ -608,3 +608,233 @@ class BudgetServiceTests(TestCase):
 
         self.assertFalse(snapshot["found"])
         self.assertEqual(snapshot["available_amount"], Decimal("0"))
+
+
+# ---------------------------------------------------------------------------
+# C3 · Detalle de la factura de compra
+# ---------------------------------------------------------------------------
+
+class SupplierInvoiceItemTests(TestCase):
+    """
+    "Que las facturas de compra también se pudiesen ir registrando y ojalá
+    filtrando por ítem en forma automática" — Jefatura de Adm. y Finanzas.
+    """
+
+    def setUp(self):
+        from apps.organizations.models import CostCenter
+        from apps.finance.models import BudgetCategory
+        from apps.products.models import ProductCategory, UnitOfMeasure, Product
+        from django.utils import timezone
+
+        self.client = APIClient()
+        self.admin = make_superuser("inv_item_admin", "pass")
+        self.client.force_authenticate(user=self.admin)
+
+        _, self.le, self.branch = setup_org()
+        self.supplier = Supplier.objects.create(
+            name="Proveedor Ítems", rut="77123456-7", is_active=True
+        )
+
+        self.cc_imagen = CostCenter.objects.create(
+            legal_entity=self.le, code="CC-IMG", name="Imagenología", is_active=True
+        )
+        self.cc_admin = CostCenter.objects.create(
+            legal_entity=self.le, code="CC-ADM", name="Administración", is_active=True
+        )
+
+        self.categoria = ProductCategory.objects.create(name="Insumos", is_active=True)
+        self.unidad = UnitOfMeasure.objects.create(code="UN", name="Unidad")
+        self.producto = Product.objects.create(
+            category=self.categoria, unit=self.unidad, name="Guantes"
+        )
+
+        self.budget_category = BudgetCategory.objects.create(
+            code="OP-EGR-07",
+            name="Insumos clínicos",
+            block=BudgetCategory.BLOCK_OPERATING_EXPENSE,
+        )
+
+        hoy = timezone.now()
+        self.period = (hoy.year, hoy.month)
+
+    def _factura(self, total=Decimal("100000"), cost_center=None):
+        return SupplierInvoice.objects.create(
+            supplier=self.supplier,
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=cost_center,
+            invoice_number=f"F-{SupplierInvoice.objects.count() + 1}",
+            total_amount=total,
+        )
+
+    def _budget(self, cost_center, amount=Decimal("500000")):
+        return Budget.objects.create(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=cost_center,
+            budget_category=self.budget_category,
+            period_year=self.period[0],
+            period_month=self.period[1],
+            budget_amount=amount,
+        )
+
+    def test_total_del_item_se_deriva_y_no_se_pide(self):
+        from apps.finance.models import SupplierInvoiceItem
+
+        factura = self._factura()
+        item = SupplierInvoiceItem.objects.create(
+            supplier_invoice=factura,
+            product=self.producto,
+            quantity=Decimal("10"),
+            unit_price=Decimal("1500"),
+            tax_amount=Decimal("2850"),
+        )
+
+        self.assertEqual(item.net_amount, Decimal("15000"))
+        self.assertEqual(item.total_amount, Decimal("17850"))
+        # Hereda la categoría del producto sin que nadie la escriba.
+        self.assertEqual(item.category_id, self.categoria.id)
+
+    def test_factura_con_dos_centros_de_costo_se_imputa_a_cada_uno(self):
+        """
+        El caso que motiva todo C3: sin detalle, esta factura cargaba entera a
+        un solo centro de costo.
+        """
+        from apps.finance.models import SupplierInvoiceItem
+        from apps.finance.services import register_supplier_invoice
+
+        b_imagen = self._budget(self.cc_imagen)
+        b_admin = self._budget(self.cc_admin)
+
+        factura = self._factura(total=Decimal("30000"), cost_center=self.cc_imagen)
+
+        SupplierInvoiceItem.objects.create(
+            supplier_invoice=factura,
+            product=self.producto,
+            cost_center=self.cc_imagen,
+            budget_category=self.budget_category,
+            quantity=Decimal("1"),
+            unit_price=Decimal("20000"),
+        )
+        SupplierInvoiceItem.objects.create(
+            supplier_invoice=factura,
+            description="Resma de papel",
+            cost_center=self.cc_admin,
+            budget_category=self.budget_category,
+            quantity=Decimal("1"),
+            unit_price=Decimal("10000"),
+        )
+
+        register_supplier_invoice(factura)
+
+        b_imagen.refresh_from_db()
+        b_admin.refresh_from_db()
+
+        self.assertEqual(b_imagen.consumed_amount, Decimal("20000"))
+        self.assertEqual(b_admin.consumed_amount, Decimal("10000"))
+
+    def test_sin_detalle_se_imputa_por_la_cabecera(self):
+        from apps.finance.services import register_supplier_invoice
+
+        budget = self._budget(self.cc_imagen)
+        factura = self._factura(total=Decimal("25000"), cost_center=self.cc_imagen)
+
+        register_supplier_invoice(factura)
+
+        budget.refresh_from_db()
+        self.assertEqual(budget.consumed_amount, Decimal("25000"))
+
+    def test_cuadratura_con_tolerancia_de_redondeo(self):
+        from apps.finance.models import SupplierInvoiceItem
+        from apps.finance.services import invoice_items_match_total
+
+        factura = self._factura(total=Decimal("10000"))
+        SupplierInvoiceItem.objects.create(
+            supplier_invoice=factura,
+            description="Servicio",
+            quantity=Decimal("1"),
+            unit_price=Decimal("10001"),
+        )
+
+        cuadra, suma, diferencia = invoice_items_match_total(factura)
+
+        self.assertTrue(cuadra)
+        self.assertEqual(suma, Decimal("10001"))
+        self.assertEqual(diferencia, Decimal("1"))
+
+    def test_cuadratura_detecta_diferencia_real(self):
+        from apps.finance.models import SupplierInvoiceItem
+        from apps.finance.services import invoice_items_match_total
+
+        factura = self._factura(total=Decimal("10000"))
+        SupplierInvoiceItem.objects.create(
+            supplier_invoice=factura,
+            description="Servicio",
+            quantity=Decimal("1"),
+            unit_price=Decimal("7000"),
+        )
+
+        cuadra, _, diferencia = invoice_items_match_total(factura)
+
+        self.assertFalse(cuadra)
+        self.assertEqual(diferencia, Decimal("-3000"))
+
+    def test_prefill_items_desde_la_orden(self):
+        from apps.purchasing.models import PurchaseOrder, PurchaseOrderItem
+        from apps.purchasing.services import generate_purchase_order_number
+
+        po = PurchaseOrder.objects.create(
+            order_number=generate_purchase_order_number(),
+            supplier=self.supplier,
+            branch=self.branch,
+            legal_entity=self.le,
+            cost_center=self.cc_imagen,
+            status=PurchaseOrder.STATUS_RECEIVED,
+            total_amount=Decimal("30000"),
+        )
+        PurchaseOrderItem.objects.create(
+            purchase_order=po,
+            product=self.producto,
+            quantity=Decimal("3"),
+            unit_price=Decimal("10000"),
+        )
+
+        factura = self._factura(total=Decimal("30000"))
+        factura.purchase_order = po
+        factura.save()
+
+        resp = self.client.post(
+            f"/api/supplier-invoices/{factura.uuid}/prefill-items/"
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(factura.items.count(), 1)
+
+        item = factura.items.first()
+        self.assertEqual(item.product_id, self.producto.id)
+        self.assertEqual(item.cost_center_id, self.cc_imagen.id)
+        self.assertEqual(item.total_amount, Decimal("30000"))
+
+    def test_prefill_sin_orden_devuelve_400(self):
+        factura = self._factura()
+
+        resp = self.client.post(
+            f"/api/supplier-invoices/{factura.uuid}/prefill-items/"
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_item_sin_producto_ni_descripcion_es_rechazado(self):
+        factura = self._factura()
+
+        resp = self.client.post(
+            "/api/supplier-invoice-items/",
+            {
+                "supplier_invoice": factura.id,
+                "quantity": "1",
+                "unit_price": "1000",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)

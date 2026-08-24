@@ -372,28 +372,114 @@ def register_supplier_invoice(supplier_invoice):
 
     purchase_order = supplier_invoice.purchase_order
 
+    # El compromiso se libera siempre contra la orden concreta, que es más
+    # preciso que liberarlo contra el presupuesto.
     if purchase_order is not None:
         release_purchase_order_commitment(purchase_order, amount=amount)
-        budget = budget_for_purchase_order(purchase_order)
-    else:
+
+    items = list(
+        supplier_invoice.items.select_related("cost_center", "budget_category")
+    )
+
+    # Con detalle, cada ítem se imputa a su propio centro de costo. Sin él, la
+    # factura entera va al centro de costo de la cabecera — que es lo que hoy
+    # obliga a filtrar a mano cuando una factura mezcla dos centros.
+    if items:
+        _consume_by_item(supplier_invoice, items)
+        return None
+
+    return _consume_invoice_header(supplier_invoice, amount)
+
+
+def _invoice_period(supplier_invoice):
+    fecha = supplier_invoice.issue_date or supplier_invoice.created_at
+    return fecha.year, fecha.month
+
+
+def _consume_invoice_header(supplier_invoice, amount):
+    period_year, period_month = _invoice_period(supplier_invoice)
+
+    budget = get_budget_for(
+        legal_entity=supplier_invoice.legal_entity,
+        branch=supplier_invoice.branch,
+        cost_center=supplier_invoice.cost_center,
+        period_year=period_year,
+        period_month=period_month,
+    )
+
+    consume_budget(budget=budget, amount=amount, release_committed=False)
+    return budget
+
+
+def _consume_by_item(supplier_invoice, items):
+    """Imputa cada ítem a su centro de costo y a su línea presupuestaria."""
+
+    period_year, period_month = _invoice_period(supplier_invoice)
+
+    for item in items:
+        item_amount = to_decimal(item.total_amount)
+        if item_amount <= ZERO:
+            continue
+
         budget = get_budget_for(
             legal_entity=supplier_invoice.legal_entity,
             branch=supplier_invoice.branch,
-            cost_center=supplier_invoice.cost_center,
-            period_year=(
-                supplier_invoice.issue_date.year
-                if supplier_invoice.issue_date
-                else supplier_invoice.created_at.year
-            ),
-            period_month=(
-                supplier_invoice.issue_date.month
-                if supplier_invoice.issue_date
-                else supplier_invoice.created_at.month
-            ),
+            cost_center=item.cost_center or supplier_invoice.cost_center,
+            budget_category=item.budget_category,
+            product_category=item.category,
+            period_year=period_year,
+            period_month=period_month,
         )
 
-    # release_committed=False porque el compromiso ya se liberó arriba contra
-    # la orden concreta, que es más preciso que liberar contra el presupuesto.
-    consume_budget(budget=budget, amount=amount, release_committed=False)
+        consume_budget(budget=budget, amount=item_amount, release_committed=False)
 
-    return budget
+
+def build_items_from_purchase_order(supplier_invoice):
+    """
+    Precarga el detalle de la factura desde la orden que la origina.
+
+    Se hereda el centro de costo de la orden como punto de partida: quien
+    registra la factura corrige los ítems que van a otro centro, en vez de
+    tipear el detalle completo.
+    """
+
+    from .models import SupplierInvoiceItem
+
+    purchase_order = supplier_invoice.purchase_order
+
+    if purchase_order is None or supplier_invoice.items.exists():
+        return []
+
+    creados = []
+
+    for order_item in purchase_order.items.select_related("product"):
+        creados.append(
+            SupplierInvoiceItem.objects.create(
+                supplier_invoice=supplier_invoice,
+                product=order_item.product,
+                cost_center=purchase_order.cost_center,
+                quantity=order_item.quantity,
+                unit_price=order_item.unit_price,
+                tax_amount=order_item.tax_amount,
+            )
+        )
+
+    return creados
+
+
+def invoice_items_match_total(supplier_invoice, tolerance=Decimal("1")):
+    """
+    (cuadra, suma_de_items, diferencia).
+
+    La tolerancia por defecto es de un peso: los totales vienen redondeados
+    desde el documento del proveedor y exigir cuadratura exacta rechazaría
+    facturas correctas.
+    """
+
+    total_items = sum(
+        (to_decimal(item.total_amount) for item in supplier_invoice.items.all()),
+        ZERO,
+    )
+    diferencia = total_items - to_decimal(supplier_invoice.total_amount)
+
+    return abs(diferencia) <= tolerance, total_items, diferencia
