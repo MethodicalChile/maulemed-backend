@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, F
 from django.utils import timezone
 
 from rest_framework.decorators import api_view, permission_classes
@@ -250,7 +250,7 @@ def dashboard_summary(request):
 
         available_quantity = (
             stocks_qs.aggregate(
-                total=Sum("available_quantity")
+                total=Sum(F("quantity") - F("reserved_quantity"))
             )["total"]
             or 0
         )
@@ -559,7 +559,7 @@ def dashboard_inventory(request):
 
         "available_quantity":
             stocks_qs.aggregate(
-                total=Sum("available_quantity")
+                total=Sum(F("quantity") - F("reserved_quantity"))
             )["total"]
             or 0,
 
