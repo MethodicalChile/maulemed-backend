@@ -278,7 +278,14 @@ class BudgetModelTests(TestCase):
         )
         self.assertEqual(budget.available_amount, Decimal("7000"))
 
-    def test_clean_falla_si_consumido_mayor_a_presupuesto(self):
+    def test_sobregiro_se_registra_y_no_bloquea(self):
+        """
+        El sobregiro tiene que poder existir en el sistema.
+
+        Antes clean() lo rechazaba. Bloquearlo obligaba a dejar la compra fuera
+        de la plataforma, que es peor que verla desviada: el presupuesto dejaba
+        de reflejar el gasto real justo cuando más importaba.
+        """
         budget = Budget(
             legal_entity=self.le,
             period_year=2024,
@@ -286,8 +293,31 @@ class BudgetModelTests(TestCase):
             budget_amount=Decimal("1000"),
             consumed_amount=Decimal("2000"),
         )
-        with self.assertRaises(ValidationError):
-            budget.clean()
+
+        budget.clean()  # no levanta
+
+        self.assertEqual(budget.available_amount, Decimal("-1000"))
+        self.assertEqual(budget.deviation_amount, Decimal("1000"))
+        self.assertTrue(budget.is_overrun)
+
+    def test_disponible_descuenta_comprometido_y_consumido(self):
+        """
+        Entre aprobar la orden y recibir la factura pueden pasar semanas. Si el
+        saldo no descontara el comprometido, dos compras seguidas verían el
+        mismo disponible.
+        """
+        budget = Budget(
+            legal_entity=self.le,
+            period_year=2024,
+            period_month=6,
+            budget_amount=Decimal("10000"),
+            committed_amount=Decimal("2500"),
+            consumed_amount=Decimal("3000"),
+        )
+
+        self.assertEqual(budget.used_amount, Decimal("5500"))
+        self.assertEqual(budget.available_amount, Decimal("4500"))
+        self.assertFalse(budget.is_overrun)
 
     def test_str_budget(self):
         # Crear org/le dedicados para evitar colisión de RUT con setUp
@@ -407,3 +437,174 @@ class BudgetSerializerUpdateTests(BaseFinanceTest):
             format="json",
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# C1 · Servicios de presupuesto
+# ---------------------------------------------------------------------------
+
+class BudgetCategorySeedTests(TestCase):
+    """Las categorías son las de la planilla, no una taxonomía inventada."""
+
+    def test_seed_crea_las_34_categorias_de_la_planilla(self):
+        from django.core.management import call_command
+        from apps.finance.models import BudgetCategory
+
+        call_command("seed_budget_categories", verbosity=0)
+
+        self.assertEqual(BudgetCategory.objects.count(), 34)
+
+        bloques = {
+            BudgetCategory.BLOCK_OPERATING_REVENUE: 5,
+            BudgetCategory.BLOCK_OPERATING_EXPENSE: 20,
+            BudgetCategory.BLOCK_INVESTMENT_EXPENSE: 4,
+            BudgetCategory.BLOCK_FINANCING_REVENUE: 2,
+            BudgetCategory.BLOCK_FINANCING_EXPENSE: 3,
+        }
+        for block, esperado in bloques.items():
+            self.assertEqual(
+                BudgetCategory.objects.filter(block=block).count(),
+                esperado,
+                f"bloque {block}",
+            )
+
+        # Nombre literal de la planilla, no una versión "corregida".
+        self.assertTrue(
+            BudgetCategory.objects.filter(
+                name="Licencias RIS/PACS y software"
+            ).exists()
+        )
+
+    def test_seed_es_idempotente(self):
+        from django.core.management import call_command
+        from apps.finance.models import BudgetCategory
+
+        call_command("seed_budget_categories", verbosity=0)
+        call_command("seed_budget_categories", verbosity=0)
+
+        self.assertEqual(BudgetCategory.objects.count(), 34)
+
+
+class BudgetServiceTests(TestCase):
+
+    def setUp(self):
+        from apps.organizations.models import CostCenter
+        from apps.finance.models import BudgetCategory
+
+        self.org, self.le, self.branch = setup_org()
+        self.cost_center = CostCenter.objects.create(
+            legal_entity=self.le,
+            branch=self.branch,
+            code="CC-01",
+            name="Imagenología",
+            is_active=True,
+        )
+        self.category = BudgetCategory.objects.create(
+            code="OP-EGR-07",
+            name="Insumos clínicos",
+            block=BudgetCategory.BLOCK_OPERATING_EXPENSE,
+            sign=BudgetCategory.SIGN_OUTFLOW,
+        )
+
+    def _budget(self, **kwargs):
+        defaults = dict(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            budget_category=self.category,
+            period_year=2026,
+            period_month=8,
+            budget_amount=Decimal("1000000"),
+        )
+        defaults.update(kwargs)
+        return Budget.objects.create(**defaults)
+
+    def test_get_budget_for_cae_al_alcance_mas_general(self):
+        """
+        Si el centro de costo no tiene línea propia, gobierna la de la sociedad.
+        Exigir coincidencia exacta dejaría sin control casi todo gasto al
+        principio, cuando los centros de costo recién se están cargando.
+        """
+        from apps.finance.services import get_budget_for
+
+        general = self._budget(branch=None, cost_center=None)
+
+        encontrado = get_budget_for(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            budget_category=self.category,
+            period_year=2026,
+            period_month=8,
+        )
+        self.assertEqual(encontrado, general)
+
+    def test_get_budget_for_prefiere_el_mas_especifico(self):
+        from apps.finance.services import get_budget_for
+
+        self._budget(branch=None, cost_center=None)
+        especifico = self._budget()
+
+        encontrado = get_budget_for(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            budget_category=self.category,
+            period_year=2026,
+            period_month=8,
+        )
+        self.assertEqual(encontrado, especifico)
+
+    def test_commit_y_consume_no_cuentan_dos_veces(self):
+        """
+        Comprometer al aprobar y consumir al facturar tiene que dar el mismo
+        saldo que consumir una sola vez: la factura materializa el compromiso,
+        no se suma a él.
+        """
+        from apps.finance.services import commit_budget, consume_budget
+
+        budget = self._budget()
+
+        commit_budget(budget=budget, amount=Decimal("300000"))
+        budget.refresh_from_db()
+        self.assertEqual(budget.available_amount, Decimal("700000"))
+
+        consume_budget(budget=budget, amount=Decimal("300000"))
+        budget.refresh_from_db()
+        self.assertEqual(budget.committed_amount, Decimal("0"))
+        self.assertEqual(budget.consumed_amount, Decimal("300000"))
+        self.assertEqual(budget.available_amount, Decimal("700000"))
+
+    def test_release_no_deja_comprometido_negativo(self):
+        from apps.finance.services import commit_budget, release_commitment
+
+        budget = self._budget()
+        commit_budget(budget=budget, amount=Decimal("100000"))
+
+        release_commitment(budget=budget, amount=Decimal("500000"))
+        budget.refresh_from_db()
+
+        self.assertEqual(budget.committed_amount, Decimal("0"))
+
+    def test_servicios_toleran_presupuesto_inexistente(self):
+        """
+        Sin presupuesto cargado la compra tiene que poder seguir. El control
+        informa; no es una precondición de la operación clínica.
+        """
+        from apps.finance.services import (
+            commit_budget,
+            consume_budget,
+            release_commitment,
+        )
+
+        self.assertIsNone(commit_budget(budget=None, amount=Decimal("100")))
+        self.assertIsNone(consume_budget(budget=None, amount=Decimal("100")))
+        self.assertIsNone(release_commitment(budget=None, amount=Decimal("100")))
+
+    def test_budget_snapshot_sin_presupuesto(self):
+        from apps.finance.services import budget_snapshot
+
+        snapshot = budget_snapshot(None)
+
+        self.assertFalse(snapshot["found"])
+        self.assertEqual(snapshot["available_amount"], Decimal("0"))

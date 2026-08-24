@@ -280,6 +280,16 @@ class PurchaseOrder(BaseModel):
     tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
+    # Cuánto de esta orden sigue comprometido contra el presupuesto. Se llena al
+    # aprobar y se descuenta al facturar, cancelar o cerrar. Sin este dato, una
+    # orden facturada y luego cerrada liberaría dos veces el mismo monto, y la
+    # segunda liberación se comería el compromiso de otra orden.
+    budget_committed_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+    )
+
     notes = models.TextField(blank=True, null=True)
 
     approved_at = models.DateTimeField(blank=True, null=True)

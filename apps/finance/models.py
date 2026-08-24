@@ -210,6 +210,75 @@ class Payment(BaseModel):
         return f"{self.payment_method} - {self.amount}"
 
 
+class BudgetCategory(BaseModel):
+    """
+    Categoría del presupuesto de caja.
+
+    No es la categoría de producto: son las líneas de la planilla de flujo con
+    las que la Jefatura de Administración y Finanzas arma el presupuesto anual,
+    agrupadas en los cuatro bloques del estado de flujo de efectivo. Una compra
+    de insumos se imputa a "Insumos clínicos" aquí y, si hace falta el detalle,
+    a una ProductCategory dentro de esa línea.
+
+    Los cinco bloques y sus 34 categorías son los de la planilla, en su mismo
+    orden, para que el presupuesto cargado aquí sea reconocible por quien hoy lo
+    llena a mano.
+    """
+
+    BLOCK_OPERATING_REVENUE = "OPERACION_INGRESO"
+    BLOCK_OPERATING_EXPENSE = "OPERACION_EGRESO"
+    BLOCK_INVESTMENT_EXPENSE = "INVERSION_EGRESO"
+    BLOCK_FINANCING_REVENUE = "FINANCIAMIENTO_INGRESO"
+    BLOCK_FINANCING_EXPENSE = "FINANCIAMIENTO_EGRESO"
+
+    BLOCK_CHOICES = [
+        (BLOCK_OPERATING_REVENUE, "Operación - Ingreso"),
+        (BLOCK_OPERATING_EXPENSE, "Operación - Egreso"),
+        (BLOCK_INVESTMENT_EXPENSE, "Inversión - Egreso"),
+        (BLOCK_FINANCING_REVENUE, "Financiamiento - Ingreso"),
+        (BLOCK_FINANCING_EXPENSE, "Financiamiento - Egreso"),
+    ]
+
+    SIGN_INFLOW = 1
+    SIGN_OUTFLOW = -1
+
+    SIGN_CHOICES = [
+        (SIGN_INFLOW, "Entrada de caja"),
+        (SIGN_OUTFLOW, "Salida de caja"),
+    ]
+
+    code = models.CharField(max_length=30, unique=True)
+    name = models.CharField(max_length=180)
+
+    block = models.CharField(
+        max_length=40,
+        choices=BLOCK_CHOICES,
+    )
+    sign = models.SmallIntegerField(
+        choices=SIGN_CHOICES,
+        default=SIGN_OUTFLOW,
+    )
+
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "budget_categories"
+        verbose_name = "Budget Category"
+        verbose_name_plural = "Budget Categories"
+        ordering = ["display_order", "code"]
+        indexes = [
+            models.Index(fields=["block"], name="idx_budget_category_block"),
+        ]
+
+    @property
+    def is_inflow(self):
+        return self.sign == self.SIGN_INFLOW
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
 class Budget(BaseModel):
     legal_entity = models.ForeignKey(
         LegalEntity,
@@ -230,18 +299,34 @@ class Budget(BaseModel):
         blank=True,
         null=True,
     )
+    budget_category = models.ForeignKey(
+        BudgetCategory,
+        on_delete=models.PROTECT,
+        related_name="budgets",
+        blank=True,
+        null=True,
+        help_text="Línea del presupuesto de caja a la que pertenece este monto.",
+    )
+
     category = models.ForeignKey(
         ProductCategory,
         on_delete=models.SET_NULL,
         related_name="budgets",
         blank=True,
         null=True,
+        help_text="Desglose opcional por categoría de producto dentro de la línea.",
     )
 
     period_year = models.IntegerField()
     period_month = models.IntegerField()
 
     budget_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    # Comprometido: aprobado en una orden de compra pero todavía sin factura.
+    # Consumido: ya facturado. Separarlos permite que el saldo disponible
+    # descuente la compra desde que se autoriza y no recién cuando llega el
+    # documento, que es cuando hoy se entera el presupuesto.
+    committed_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     consumed_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
     notes = models.TextField(blank=True, null=True)
@@ -268,11 +353,16 @@ class Budget(BaseModel):
                 check=models.Q(consumed_amount__gte=0),
                 name="chk_budget_consumed_non_negative",
             ),
+            models.CheckConstraint(
+                check=models.Q(committed_amount__gte=0),
+                name="chk_budget_committed_non_negative",
+            ),
             models.UniqueConstraint(
                 fields=[
                     "legal_entity",
                     "branch",
                     "cost_center",
+                    "budget_category",
                     "category",
                     "period_year",
                     "period_month",
@@ -282,12 +372,28 @@ class Budget(BaseModel):
         ]
 
     @property
+    def used_amount(self):
+        return self.committed_amount + self.consumed_amount
+
+    @property
     def available_amount(self):
-        return self.budget_amount - self.consumed_amount
+        return self.budget_amount - self.used_amount
+
+    @property
+    def is_overrun(self):
+        return self.available_amount < 0
+
+    @property
+    def deviation_amount(self):
+        """Positivo cuando se gastó de más. Es lo que reporta la desviación."""
+        return self.used_amount - self.budget_amount
 
     def clean(self):
-        if self.consumed_amount > self.budget_amount:
-            raise ValidationError("El monto consumido no puede superar el presupuesto.")
+        # El sobregiro NO es un error de validación: tiene que poder registrarse
+        # y verse. Bloquearlo aquí impediría aprobar una compra legítima cuando
+        # el presupuesto está recién cargado o mal imputado, y dejaría el gasto
+        # real fuera del sistema, que es peor que verlo desviado.
+        return None
 
     def __str__(self):
         return f"{self.legal_entity} - {self.period_month}/{self.period_year}"

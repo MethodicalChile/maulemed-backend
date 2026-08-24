@@ -108,6 +108,29 @@ class SupplyRequestViewSet(BaseModelViewSet):
 
     @action(
         detail=True,
+        methods=["get"],
+        url_path="budget-check",
+    )
+    def budget_check(self, request, uuid=None):
+        """
+        Saldo del centro de costo frente al costo estimado de la solicitud.
+
+        Es el control que la matriz RECI del capítulo financiero mostró
+        ausente: hoy la compra se decide sin saber si hay presupuesto. Se
+        expone como consulta y no como validación porque informa la decisión,
+        no la reemplaza.
+        """
+        from apps.finance.services import budget_status_for_supply_request
+
+        instance = self.get_object()
+
+        return api_response(
+            data=budget_status_for_supply_request(instance),
+            message="Estado presupuestario obtenido correctamente.",
+        )
+
+    @action(
+        detail=True,
         methods=["post"],
     )
     def submit(self, request, uuid=None):
@@ -526,23 +549,50 @@ class PurchaseOrderViewSet(BaseModelViewSet):
 
         old_data = serialize_instance(instance)
 
+        # Evaluación presupuestaria ANTES de aprobar. El sobregiro no bloquea:
+        # se registra en la auditoría y se devuelve en la respuesta para que
+        # quien aprueba sepa que aprobó fuera de presupuesto. Bloquear aquí
+        # dejaría el gasto real fuera del sistema, que es peor que verlo
+        # desviado.
+        from apps.finance.services import (
+            budget_status_for_purchase_order,
+            commit_purchase_order,
+        )
+
+        budget_status = budget_status_for_purchase_order(instance)
+
         instance.status = PurchaseOrder.STATUS_APPROVED
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
         instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        commit_purchase_order(instance)
+
+        if not budget_status["found"]:
+            budget_note = "Sin presupuesto definido para el alcance de la orden."
+        elif budget_status["within_budget"]:
+            budget_note = "Dentro de presupuesto."
+        else:
+            budget_note = (
+                "FUERA_DE_PRESUPUESTO — excede el saldo disponible en "
+                f"{budget_status['shortfall_amount']}."
+            )
 
         audit_action(
             request=request,
             action="APPROVE_PURCHASE_ORDER",
             instance=instance,
             old_data=old_data,
-            notes="Orden de compra aprobada.",
+            notes=f"Orden de compra aprobada. {budget_note}",
         )
 
         notify_purchase_order_approved(instance)
 
+        data = self.get_serializer(instance).data
+        data["budget_status"] = budget_status
+
         return api_response(
-            data=self.get_serializer(instance).data,
+            data=data,
             message="Orden de compra aprobada correctamente.",
         )
 
@@ -579,6 +629,11 @@ class PurchaseOrderViewSet(BaseModelViewSet):
         instance.cancelled_at = timezone.now()
         instance.save(update_fields=["status", "cancelled_at", "updated_at"])
 
+        # La orden anulada deja de comprometer presupuesto.
+        from apps.finance.services import release_purchase_order_commitment
+
+        release_purchase_order_commitment(instance)
+
         audit_action(
             request=request,
             action="CANCEL_PURCHASE_ORDER",
@@ -600,6 +655,12 @@ class PurchaseOrderViewSet(BaseModelViewSet):
 
         instance.status = PurchaseOrder.STATUS_CLOSED
         instance.save(update_fields=["status", "updated_at"])
+
+        # Al cerrar se libera lo que quedó comprometido y nunca se facturó —por
+        # ejemplo una recepción parcial que ya no se completará.
+        from apps.finance.services import release_purchase_order_commitment
+
+        release_purchase_order_commitment(instance)
 
         audit_action(
             request=request,

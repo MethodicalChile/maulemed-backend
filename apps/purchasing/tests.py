@@ -1716,3 +1716,257 @@ class PurchaseOrderItemStrTest(TestCase):
         result = str(item)
         self.assertIn(po.order_number, result)
         self.assertIn("Prod POI Str", result)
+
+
+# ---------------------------------------------------------------------------
+# C1 · El presupuesto dentro del flujo de compra
+# ---------------------------------------------------------------------------
+
+class BudgetControlInPurchasingTests(TestCase):
+    """
+    El control presupuestario previo, que la matriz RECI del capítulo
+    financiero mostró ausente: hoy la compra se decide sin saber si hay
+    presupuesto.
+    """
+
+    def setUp(self):
+        from apps.organizations.models import CostCenter
+        from apps.finance.models import Budget, BudgetCategory
+
+        from django.utils import timezone
+
+        self.client = APIClient()
+        self.org, self.le, self.branch = setup_org()
+        self.admin = make_superuser("budget_admin", "pass")
+        self.client.force_authenticate(user=self.admin)
+
+        # El presupuesto se resuelve por el período del documento, y una orden
+        # recién creada cae en el mes de hoy. Anclar el presupuesto a un año
+        # fijo lo dejaría fuera de alcance.
+        hoy = timezone.now()
+        self.period_year = hoy.year
+        self.period_month = hoy.month
+
+        self.supplier = make_supplier()
+        self.product = make_product()
+        self.cost_center = CostCenter.objects.create(
+            legal_entity=self.le,
+            branch=self.branch,
+            code="CC-BUD",
+            name="Centro presupuestado",
+            is_active=True,
+        )
+        self.category = BudgetCategory.objects.create(
+            code="OP-EGR-07",
+            name="Insumos clínicos",
+            block=BudgetCategory.BLOCK_OPERATING_EXPENSE,
+        )
+        self.budget = Budget.objects.create(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            budget_category=self.category,
+            period_year=self.period_year,
+            period_month=self.period_month,
+            budget_amount=Decimal("100000"),
+        )
+
+    def _order(self, total=Decimal("1190")):
+        po = make_purchase_order(self.branch, self.supplier, le=self.le)
+        po.cost_center = self.cost_center
+        po.total_amount = total
+        po.save()
+        PurchaseOrderItem.objects.create(
+            purchase_order=po,
+            product=self.product,
+            quantity=Decimal("1"),
+            unit_price=total,
+        )
+        return po
+
+    def _supply_request(self):
+        sr = make_supply_request(
+            self.branch,
+            self.admin,
+            le=self.le,
+            year=self.period_year,
+            month=self.period_month,
+        )
+        sr.cost_center = self.cost_center
+        sr.save()
+        return sr
+
+    # ── Compromiso y liberación ────────────────────────────────────────────
+
+    def test_aprobar_orden_compromete_presupuesto(self):
+        po = self._order(Decimal("30000"))
+
+        resp = self.client.post(f"/api/purchase-orders/{po.uuid}/approve/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        self.budget.refresh_from_db()
+        po.refresh_from_db()
+
+        self.assertEqual(self.budget.committed_amount, Decimal("30000"))
+        self.assertEqual(self.budget.available_amount, Decimal("70000"))
+        self.assertEqual(po.budget_committed_amount, Decimal("30000"))
+
+    def test_cancelar_orden_libera_el_compromiso(self):
+        po = self._order(Decimal("30000"))
+        self.client.post(f"/api/purchase-orders/{po.uuid}/approve/")
+
+        resp = self.client.post(f"/api/purchase-orders/{po.uuid}/cancel/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        self.budget.refresh_from_db()
+        po.refresh_from_db()
+
+        self.assertEqual(self.budget.committed_amount, Decimal("0"))
+        self.assertEqual(self.budget.available_amount, Decimal("100000"))
+        self.assertEqual(po.budget_committed_amount, Decimal("0"))
+
+    def test_facturar_y_luego_cerrar_no_libera_dos_veces(self):
+        """
+        El caso que motiva llevar el compromiso en la propia orden: si cerrar
+        liberara otra vez lo ya facturado, se comería el compromiso de otra
+        orden y el saldo mostraría plata que no existe.
+        """
+        from apps.finance.models import SupplierInvoice
+        from apps.finance.services import register_supplier_invoice
+
+        otra = self._order(Decimal("20000"))
+        self.client.post(f"/api/purchase-orders/{otra.uuid}/approve/")
+
+        po = self._order(Decimal("30000"))
+        self.client.post(f"/api/purchase-orders/{po.uuid}/approve/")
+
+        self.budget.refresh_from_db()
+        self.assertEqual(self.budget.committed_amount, Decimal("50000"))
+
+        factura = SupplierInvoice.objects.create(
+            supplier=self.supplier,
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            purchase_order=po,
+            invoice_number="F-001",
+            total_amount=Decimal("30000"),
+        )
+        register_supplier_invoice(factura)
+
+        self.client.post(f"/api/purchase-orders/{po.uuid}/close/")
+
+        self.budget.refresh_from_db()
+
+        # Sólo queda comprometida la otra orden, intacta.
+        self.assertEqual(self.budget.committed_amount, Decimal("20000"))
+        self.assertEqual(self.budget.consumed_amount, Decimal("30000"))
+        self.assertEqual(self.budget.available_amount, Decimal("50000"))
+
+    def test_factura_sin_orden_consume_directo(self):
+        """La compra web o por correo que describe el informe: no hay orden."""
+        from apps.finance.models import SupplierInvoice
+        from apps.finance.services import register_supplier_invoice
+
+        factura = SupplierInvoice.objects.create(
+            supplier=self.supplier,
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            invoice_number="F-WEB-001",
+            total_amount=Decimal("15000"),
+        )
+        register_supplier_invoice(factura)
+
+        self.budget.refresh_from_db()
+        self.assertEqual(self.budget.consumed_amount, Decimal("15000"))
+        self.assertEqual(self.budget.committed_amount, Decimal("0"))
+
+    # ── Sobregiro: advierte, no bloquea ────────────────────────────────────
+
+    def test_sobregiro_aprueba_igual_y_lo_deja_registrado(self):
+        from apps.audit.models import AuditLog
+
+        po = self._order(Decimal("250000"))  # supera los 100.000 del presupuesto
+
+        resp = self.client.post(f"/api/purchase-orders/{po.uuid}/approve/")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        payload = resp.json()["data"]
+        self.assertFalse(payload["budget_status"]["within_budget"])
+        self.assertEqual(
+            Decimal(str(payload["budget_status"]["shortfall_amount"])),
+            Decimal("150000"),
+        )
+
+        self.budget.refresh_from_db()
+        self.assertTrue(self.budget.is_overrun)
+
+        log = AuditLog.objects.filter(action="APPROVE_PURCHASE_ORDER").last()
+        self.assertIn("FUERA_DE_PRESUPUESTO", log.notes)
+
+    def test_aprobar_sin_presupuesto_definido_no_falla(self):
+        from apps.finance.models import Budget
+
+        po = self._order(Decimal("30000"))
+        Budget.objects.all().delete()
+
+        resp = self.client.post(f"/api/purchase-orders/{po.uuid}/approve/")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp.json()["data"]["budget_status"]["found"])
+
+    # ── budget-check sobre la solicitud ────────────────────────────────────
+
+    def test_budget_check_estima_y_avisa_que_la_estimacion_es_parcial(self):
+        """
+        La solicitud no tiene proveedor, así que no tiene precio real. El
+        endpoint estima con el último precio conocido y declara sobre cuántos
+        ítems pudo estimar: un total que no dice eso engaña.
+        """
+        sr = self._supply_request()
+
+        con_precio = make_product("Con precio")
+        sin_precio = make_product("Sin precio")
+
+        SupplierProduct.objects.create(
+            supplier=self.supplier,
+            product=con_precio,
+            last_price=Decimal("2000"),
+            is_active=True,
+        )
+
+        make_supply_request_item(sr, con_precio, quantity=Decimal("10"))
+        make_supply_request_item(sr, sin_precio, quantity=Decimal("3"))
+
+        resp = self.client.get(f"/api/supply-requests/{sr.uuid}/budget-check/")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        data = resp.json()["data"]
+
+        self.assertEqual(Decimal(str(data["estimated_amount"])), Decimal("20000"))
+        self.assertEqual(data["priced_items"], 1)
+        self.assertEqual(data["total_items"], 2)
+        self.assertTrue(data["estimate_is_partial"])
+        self.assertTrue(data["within_budget"])
+
+    def test_budget_check_marca_el_exceso(self):
+        sr = self._supply_request()
+
+        caro = make_product("Producto caro")
+        SupplierProduct.objects.create(
+            supplier=self.supplier,
+            product=caro,
+            last_price=Decimal("50000"),
+            is_active=True,
+        )
+        make_supply_request_item(sr, caro, quantity=Decimal("4"))  # 200.000
+
+        resp = self.client.get(f"/api/supply-requests/{sr.uuid}/budget-check/")
+        data = resp.json()["data"]
+
+        self.assertFalse(data["within_budget"])
+        self.assertEqual(
+            Decimal(str(data["shortfall_amount"])), Decimal("100000")
+        )

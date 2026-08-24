@@ -2,11 +2,12 @@ from apps.common.viewsets import BaseModelViewSet
 from apps.common.permissions import CanManageFinance
 from apps.common.scopes import apply_legal_entity_scope
 
-from .models import SupplierInvoice, Payment, Budget
+from .models import SupplierInvoice, Payment, Budget, BudgetCategory
 from .serializers import (
     SupplierInvoiceSerializer,
     PaymentSerializer,
     BudgetSerializer,
+    BudgetCategorySerializer,
 )
 
 
@@ -66,6 +67,19 @@ class SupplierInvoiceViewSet(BaseModelViewSet):
             legal_entity_field="legal_entity",
         )
 
+    def perform_create(self, serializer):
+        """
+        Al registrar la factura, imputarla al presupuesto.
+
+        Es el segundo momento del ciclo: la orden comprometió el monto al
+        aprobarse; la factura lo convierte en gasto efectivo y libera el
+        compromiso equivalente.
+        """
+        from .services import register_supplier_invoice
+
+        super().perform_create(serializer)
+        register_supplier_invoice(serializer.instance)
+
 
 class PaymentViewSet(BaseModelViewSet):
     queryset = Payment.objects.select_related(
@@ -114,12 +128,32 @@ class PaymentViewSet(BaseModelViewSet):
         )
 
 
+class BudgetCategoryViewSet(BaseModelViewSet):
+    """
+    Catálogo de líneas del presupuesto de caja.
+
+    No lleva scope por sociedad: las 34 categorías son las mismas para todas
+    las razones sociales — lo que cambia por sociedad es el monto, que vive en
+    Budget.
+    """
+
+    queryset = BudgetCategory.objects.all()
+    serializer_class = BudgetCategorySerializer
+    permission_classes = [CanManageFinance]
+
+    filterset_fields = ["block", "sign", "is_active"]
+    search_fields = ["code", "name"]
+    ordering_fields = ["display_order", "code", "name", "block"]
+    ordering = ["display_order", "code"]
+
+
 class BudgetViewSet(BaseModelViewSet):
     queryset = Budget.objects.select_related(
         "legal_entity",
         "branch",
         "cost_center",
         "category",
+        "budget_category",
     ).all()
 
     serializer_class = BudgetSerializer
@@ -130,6 +164,8 @@ class BudgetViewSet(BaseModelViewSet):
         "branch",
         "cost_center",
         "category",
+        "budget_category",
+        "budget_category__block",
         "period_year",
         "period_month",
     ]
@@ -139,6 +175,8 @@ class BudgetViewSet(BaseModelViewSet):
         "branch__name",
         "cost_center__name",
         "category__name",
+        "budget_category__name",
+        "budget_category__code",
         "notes",
     ]
 
@@ -146,6 +184,7 @@ class BudgetViewSet(BaseModelViewSet):
         "period_year",
         "period_month",
         "budget_amount",
+        "committed_amount",
         "consumed_amount",
         "created_at",
         "updated_at",

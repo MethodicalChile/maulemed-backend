@@ -12,7 +12,7 @@ from apps.products.serializers import ProductCategorySmallSerializer
 from apps.suppliers.serializers import SupplierSmallSerializer
 from apps.purchasing.serializers import PurchaseOrderSmallSerializer
 
-from .models import SupplierInvoice, Payment, Budget
+from .models import SupplierInvoice, Payment, Budget, BudgetCategory
 
 
 class SupplierInvoiceSmallSerializer(serializers.ModelSerializer):
@@ -45,11 +45,29 @@ class PaymentSerializer(serializers.ModelSerializer):
         exclude = ["id", "deleted_at"]
 
 
+class BudgetCategorySmallSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BudgetCategory
+        fields = ["uuid", "code", "name", "block", "sign"]
+
+
+class BudgetCategorySerializer(serializers.ModelSerializer):
+    block_label = serializers.CharField(source="get_block_display", read_only=True)
+    is_inflow = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = BudgetCategory
+        exclude = ["id", "deleted_at"]
+
+
 class BudgetSerializer(serializers.ModelSerializer):
     legal_entity_detail = LegalEntitySmallSerializer(source="legal_entity", read_only=True)
     branch_detail = BranchSmallSerializer(source="branch", read_only=True)
     cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
     category_detail = ProductCategorySmallSerializer(source="category", read_only=True)
+    budget_category_detail = BudgetCategorySmallSerializer(
+        source="budget_category", read_only=True
+    )
 
     # branch, cost_center y category son FK nullable en el modelo.
     # DRF los marca como required a menos que declaremos allow_null=True explícitamente.
@@ -68,12 +86,28 @@ class BudgetSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    budget_category = serializers.PrimaryKeyRelatedField(
+        queryset=BudgetCategory.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     available_amount = serializers.DecimalField(
         max_digits=14,
         decimal_places=2,
         read_only=True,
     )
+    used_amount = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    deviation_amount = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+    is_overrun = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Budget
@@ -84,6 +118,9 @@ class BudgetSerializer(serializers.ModelSerializer):
         branch = attrs.get("branch") or (self.instance and getattr(self.instance, "branch", None))
         cost_center = attrs.get("cost_center") or (self.instance and getattr(self.instance, "cost_center", None))
         category = attrs.get("category") or (self.instance and getattr(self.instance, "category", None))
+        budget_category = attrs.get("budget_category") or (
+            self.instance and getattr(self.instance, "budget_category", None)
+        )
         period_year = attrs.get("period_year") or (self.instance and self.instance.period_year)
         period_month = attrs.get("period_month") or (self.instance and self.instance.period_month)
 
@@ -91,6 +128,7 @@ class BudgetSerializer(serializers.ModelSerializer):
             legal_entity=legal_entity,
             branch=branch,
             cost_center=cost_center,
+            budget_category=budget_category,
             category=category,
             period_year=period_year,
             period_month=period_month,
