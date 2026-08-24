@@ -69,9 +69,18 @@ def get_budget_for(
         base = base.filter(budget_category=budget_category)
 
     # De más específico a más general. El primero que exista, manda.
+    #
+    # El centro de costo se suelta al final, y después de la sucursal, porque
+    # es el eje real del control: "el saldo del centro de costo" es lo que se
+    # consulta antes de autorizar. Un presupuesto definido por sociedad y
+    # centro de costo, sin abrir por sucursal, es la forma más habitual de
+    # cargarlo — si la búsqueda soltara el centro antes que la sucursal, ese
+    # presupuesto no se encontraría nunca y el control quedaría mudo.
     candidates = [
         {"branch": branch, "cost_center": cost_center, "category": product_category},
         {"branch": branch, "cost_center": cost_center, "category": None},
+        {"branch": None, "cost_center": cost_center, "category": product_category},
+        {"branch": None, "cost_center": cost_center, "category": None},
         {"branch": branch, "cost_center": None, "category": None},
         {"branch": None, "cost_center": None, "category": None},
     ]
@@ -325,6 +334,14 @@ def commit_purchase_order(purchase_order):
         return None
 
     budget = budget_for_purchase_order(purchase_order)
+
+    # Sin presupuesto no hay nada comprometido. Anotarlo igual haría que la
+    # orden declarara un compromiso que no existe en ninguna parte, y al
+    # cerrarla se intentaría liberar contra un presupuesto que quizá se cargue
+    # después.
+    if budget is None:
+        return None
+
     commit_budget(budget=budget, amount=amount)
 
     purchase_order.budget_committed_amount = amount

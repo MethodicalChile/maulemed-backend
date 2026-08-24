@@ -601,6 +601,54 @@ class BudgetServiceTests(TestCase):
         self.assertIsNone(consume_budget(budget=None, amount=Decimal("100")))
         self.assertIsNone(release_commitment(budget=None, amount=Decimal("100")))
 
+    def test_encuentra_el_presupuesto_de_sociedad_y_centro_sin_sucursal(self):
+        """
+        La forma más habitual de cargar el presupuesto: por sociedad y centro
+        de costo, sin abrir por sucursal.
+
+        Si la búsqueda soltara el centro de costo antes que la sucursal, este
+        presupuesto no se encontraría nunca y el control quedaría mudo — que es
+        lo que pasaba al levantar la app con datos reales.
+        """
+        from apps.finance.services import get_budget_for
+
+        esperado = self._budget(branch=None)
+
+        encontrado = get_budget_for(
+            legal_entity=self.le,
+            branch=self.branch,
+            cost_center=self.cost_center,
+            budget_category=self.category,
+            period_year=2026,
+            period_month=8,
+        )
+        self.assertEqual(encontrado, esperado)
+
+    def test_sin_presupuesto_la_orden_no_declara_compromiso(self):
+        """
+        Anotar un compromiso sin presupuesto haría que la orden declarara algo
+        que no existe en ninguna parte.
+        """
+        from apps.finance.services import commit_purchase_order
+        from apps.purchasing.models import PurchaseOrder
+        from apps.purchasing.services import generate_purchase_order_number
+        from apps.suppliers.models import Supplier
+
+        proveedor = Supplier.objects.create(name="Prov", rut="99111222-3")
+        po = PurchaseOrder.objects.create(
+            order_number=generate_purchase_order_number(),
+            supplier=proveedor,
+            branch=self.branch,
+            legal_entity=self.le,
+            cost_center=self.cost_center,
+            total_amount=Decimal("50000"),
+        )
+
+        self.assertIsNone(commit_purchase_order(po))
+
+        po.refresh_from_db()
+        self.assertEqual(po.budget_committed_amount, Decimal("0"))
+
     def test_budget_snapshot_sin_presupuesto(self):
         from apps.finance.services import budget_snapshot
 
