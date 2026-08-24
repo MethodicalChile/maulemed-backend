@@ -28,6 +28,7 @@ from apps.notifications.services import (
 )
 
 from .models import (
+    ApprovalRule,
     SupplyRequest,
     SupplyRequestItem,
     PurchaseOrder,
@@ -38,6 +39,7 @@ from .models import (
 )
 from .action_serializers import ConvertSupplyRequestToPurchaseOrderSerializer
 from .serializers import (
+    ApprovalRuleSerializer,
     SupplyRequestSerializer,
     SupplyRequestItemSerializer,
     PurchaseOrderSerializer,
@@ -547,6 +549,23 @@ class PurchaseOrderViewSet(BaseModelViewSet):
                 message="No puedes aprobar una orden de compra sin ítems.",
             )
 
+        # La política de umbrales manda sobre el permiso genérico: tener
+        # can_approve_purchase_orders no alcanza si el monto exige gerencia.
+        from .services import user_can_approve
+
+        allowed, required_role = user_can_approve(request.user, instance)
+
+        if not allowed:
+            return api_response(
+                data={"required_role": required_role.code},
+                status_code=403,
+                status_text="error",
+                message=(
+                    f"Una orden por {instance.total_amount} requiere aprobación "
+                    f"de {required_role.name}."
+                ),
+            )
+
         old_data = serialize_instance(instance)
 
         # Evaluación presupuestaria ANTES de aprobar. El sobregiro no bloquea:
@@ -862,3 +881,22 @@ class SupplierClaimViewSet(BaseModelViewSet):
         # Permitir ver reclamos globales (sin receipt o sin branch) incluso con scope
         return apply_branch_scope(qs, self.request.user, branch_field="purchase_receipt__branch") | \
                SupplierClaim.objects.filter(purchase_receipt__isnull=True)
+
+class ApprovalRuleViewSet(BaseModelViewSet):
+    """
+    Umbrales de aprobación por monto. Escribir la regla es la mitad barata del
+    control; sin ella la autorización depende de que alguien se acuerde.
+    """
+
+    queryset = ApprovalRule.objects.select_related(
+        "legal_entity",
+        "required_role",
+    ).all()
+
+    serializer_class = ApprovalRuleSerializer
+    permission_classes = [CanApprovePurchaseOrder]
+
+    filterset_fields = ["legal_entity", "purchase_type", "required_role", "is_active"]
+    search_fields = ["required_role__name", "required_role__code", "notes"]
+    ordering_fields = ["amount_from", "amount_to", "created_at"]
+    ordering = ["amount_from"]

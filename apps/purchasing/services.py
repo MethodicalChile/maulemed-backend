@@ -407,3 +407,72 @@ def convert_supply_request_to_purchase_order(
         "purchase_order": purchase_order,
         "purchase_order_items": created_items,
     }
+
+
+# ---------------------------------------------------------------------------
+# C2 · Umbrales de aprobación por monto
+# ---------------------------------------------------------------------------
+
+def get_required_role(purchase_order):
+    """
+    Rol que la política exige para aprobar esta orden, o None si ninguna regla
+    la gobierna.
+
+    Cuando varias reglas calzan gana la más específica: primero la que nombra
+    la razón social y el tipo de compra, después la que nombra una de las dos,
+    y por último la global. Sin ese orden, una regla global permisiva anularía
+    en silencio a una regla estricta escrita para un caso puntual.
+    """
+
+    from .models import ApprovalRule
+
+    amount = to_decimal(purchase_order.total_amount)
+
+    matching = [
+        rule
+        for rule in ApprovalRule.objects.filter(is_active=True).select_related(
+            "required_role", "legal_entity"
+        )
+        if rule.matches(
+            amount=amount,
+            purchase_type=purchase_order.purchase_type,
+            legal_entity=purchase_order.legal_entity,
+        )
+    ]
+
+    if not matching:
+        return None
+
+    def specificity(rule):
+        return (
+            1 if rule.legal_entity_id else 0,
+            1 if rule.purchase_type else 0,
+            rule.amount_from,
+        )
+
+    matching.sort(key=specificity, reverse=True)
+    return matching[0].required_role
+
+
+def user_can_approve(user, purchase_order):
+    """
+    (permitido, rol_requerido).
+
+    Sin regla aplicable, permitido: la política se va escribiendo por tramos y
+    lo que todavía no está normado no puede quedar bloqueado.
+    """
+
+    required_role = get_required_role(purchase_order)
+
+    if required_role is None:
+        return True, None
+
+    if getattr(user, "is_superuser", False):
+        return True, required_role
+
+    has_role = user.role_assignments.filter(
+        role=required_role,
+        is_active=True,
+    ).exists()
+
+    return has_role, required_role
