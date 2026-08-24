@@ -44,83 +44,84 @@ def user_has_permission_key(user, permission_key):
     ).select_related("role"):
         saved.setdefault(rp.role.code, set()).add(rp.permission_key)
 
+    ADMIN_GERENTE_ROLES = {"ADMIN", "GERENTE"}
+
     # Defaults del sistema para roles no configurados — granulares
     DEFAULTS = {
-        "can_view_dashboard": {"ADMIN", "GERENTE"},
+        "can_view_dashboard": ADMIN_GERENTE_ROLES,
         # Organización
-        "can_view_organizations":     {"ADMIN","GERENTE"},
-        "can_create_organizations":   {"ADMIN","GERENTE"},
-        "can_edit_organizations":     {"ADMIN","GERENTE"},
-        "can_delete_organizations":   {"ADMIN"},
+        "can_view_organizations":     ADMIN_GERENTE_ROLES,
+        "can_create_organizations":   ADMIN_GERENTE_ROLES,
+        "can_edit_organizations":     ADMIN_GERENTE_ROLES,
+        "can_delete_organizations":   ADMIN_GERENTE_ROLES,
         # Productos
-        "can_view_products":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR", "ROL_PRUEBA"},
-        "can_create_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        "can_edit_products":          {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        "can_delete_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_view_products":          ADMIN_GERENTE_ROLES,
+        "can_create_products":        ADMIN_GERENTE_ROLES,
+        "can_edit_products":          ADMIN_GERENTE_ROLES,
+        "can_delete_products":        ADMIN_GERENTE_ROLES,
         # Proveedores
-        "can_view_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS", "ROL_PRUEBA"},
-        "can_create_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        "can_edit_suppliers":         {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        "can_delete_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
+        "can_view_suppliers":         ADMIN_GERENTE_ROLES,
+        "can_create_suppliers":       ADMIN_GERENTE_ROLES,
+        "can_edit_suppliers":         ADMIN_GERENTE_ROLES,
+        "can_delete_suppliers":       ADMIN_GERENTE_ROLES,
         # Inventario — Movimientos
-        "can_view_inventory":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
-        "can_create_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_edit_inventory":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_delete_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
-
+        "can_view_inventory":         ADMIN_GERENTE_ROLES,
+        "can_create_inventory":       ADMIN_GERENTE_ROLES,
+        "can_edit_inventory":         ADMIN_GERENTE_ROLES,
+        "can_delete_inventory":       ADMIN_GERENTE_ROLES,
         # Inventario — Bodegas
-        "can_view_warehouses":        {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
-        "can_create_warehouses":      {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL"},
-        "can_edit_warehouses":        {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL"},
-        "can_delete_warehouses":      {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_view_warehouses":        ADMIN_GERENTE_ROLES,
+        "can_create_warehouses":      ADMIN_GERENTE_ROLES,
+        "can_edit_warehouses":        ADMIN_GERENTE_ROLES,
+        "can_delete_warehouses":      ADMIN_GERENTE_ROLES,
         # Compras — solicitudes
-        "can_view_supply_requests":   {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA"},
-        "can_create_supply_request":  {"ADMIN","GERENTE","ABASTECIMIENTO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA"},
-        "can_edit_supply_request":    {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_approve_supply_request": {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_view_supply_requests":   ADMIN_GERENTE_ROLES,
+        "can_create_supply_request":  ADMIN_GERENTE_ROLES,
+        "can_edit_supply_request":    ADMIN_GERENTE_ROLES,
+        "can_approve_supply_request": ADMIN_GERENTE_ROLES,
         # Compras — órdenes
-        "can_view_purchase_orders":   {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS"},
-        "can_create_purchase_orders": {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_edit_purchase_orders":   {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_delete_purchase_orders": {"ADMIN","GERENTE"},
-        "can_receive_purchase":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
+        "can_view_purchase_orders":   ADMIN_GERENTE_ROLES,
+        "can_create_purchase_orders": ADMIN_GERENTE_ROLES,
+        "can_edit_purchase_orders":   ADMIN_GERENTE_ROLES,
+        "can_delete_purchase_orders": ADMIN_GERENTE_ROLES,
+        "can_receive_purchase":       ADMIN_GERENTE_ROLES,
         # Traspasos
-        "can_view_transfers":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_create_transfers":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_edit_transfers":         {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_delete_transfers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
+        "can_view_transfers":         ADMIN_GERENTE_ROLES,
+        "can_create_transfers":       ADMIN_GERENTE_ROLES,
+        "can_edit_transfers":         ADMIN_GERENTE_ROLES,
+        "can_delete_transfers":       ADMIN_GERENTE_ROLES,
         # Finanzas
-        "can_view_finance":           {"ADMIN","GERENTE","FINANZAS"},
-        "can_create_finance":         {"ADMIN","GERENTE","FINANZAS"},
-        "can_edit_finance":           {"ADMIN","GERENTE","FINANZAS"},
-        "can_delete_finance":         {"ADMIN","GERENTE"},
+        "can_view_finance":           ADMIN_GERENTE_ROLES,
+        "can_create_finance":         ADMIN_GERENTE_ROLES,
+        "can_edit_finance":           ADMIN_GERENTE_ROLES,
+        "can_delete_finance":         ADMIN_GERENTE_ROLES,
         # Evaluaciones
-        "can_view_evaluations":       {"ADMIN","GERENTE"},
-        "can_create_evaluations":     {"ADMIN","GERENTE"},
-        "can_edit_evaluations":       {"ADMIN","GERENTE"},
-        "can_delete_evaluations":     {"ADMIN"},
+        "can_view_evaluations":       ADMIN_GERENTE_ROLES,
+        "can_create_evaluations":     ADMIN_GERENTE_ROLES,
+        "can_edit_evaluations":       ADMIN_GERENTE_ROLES,
+        "can_delete_evaluations":     ADMIN_GERENTE_ROLES,
         # Reportes / usuarios / auditoría
-        "can_view_reports":           {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL"},
-        "can_view_users":             {"ADMIN"},
-        "can_create_users":           {"ADMIN"},
-        "can_edit_users":             {"ADMIN"},
-        "can_delete_users":           {"ADMIN"},
-        "can_view_roles":             {"ADMIN"},
-        "can_create_roles":           {"ADMIN"},
-        "can_edit_roles":             {"ADMIN"},
-        "can_delete_roles":           {"ADMIN"},
-        "can_view_audit":             {"ADMIN","GERENTE"},
+        "can_view_reports":           ADMIN_GERENTE_ROLES,
+        "can_view_users":             ADMIN_GERENTE_ROLES,
+        "can_create_users":           ADMIN_GERENTE_ROLES,
+        "can_edit_users":             ADMIN_GERENTE_ROLES,
+        "can_delete_users":           ADMIN_GERENTE_ROLES,
+        "can_view_roles":             ADMIN_GERENTE_ROLES,
+        "can_create_roles":           ADMIN_GERENTE_ROLES,
+        "can_edit_roles":             ADMIN_GERENTE_ROLES,
+        "can_delete_roles":           ADMIN_GERENTE_ROLES,
+        "can_view_audit":             ADMIN_GERENTE_ROLES,
         # Aliases legacy para compatibilidad con ViewSets existentes
-        "can_manage_organizations":   {"ADMIN","GERENTE"},
-        "can_manage_catalogs":        {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_view_catalogs":          {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"},
-        "can_manage_products":        {"ADMIN","GERENTE","ABASTECIMIENTO", "ROL_PRUEBA"},
-        "can_manage_suppliers":       {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_manage_inventory":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_manage_purchase_orders": {"ADMIN","GERENTE","ABASTECIMIENTO"},
-        "can_manage_transfers":       {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"},
-        "can_manage_finance":         {"ADMIN","GERENTE","FINANZAS"},
-        "can_manage_users":           {"ADMIN"},
+        # "can_manage_organizations":   ADMIN_GERENTE_ROLES,
+        # "can_manage_catalogs":        ADMIN_GERENTE_ROLES,
+        # "can_view_catalogs":          ADMIN_GERENTE_ROLES,
+        # "can_manage_products":        ADMIN_GERENTE_ROLES,
+        # "can_manage_suppliers":       ADMIN_GERENTE_ROLES,
+        # "can_manage_inventory":       ADMIN_GERENTE_ROLES,
+        # "can_manage_purchase_orders": ADMIN_GERENTE_ROLES,
+        # "can_manage_transfers":       ADMIN_GERENTE_ROLES,
+        # "can_manage_finance":         ADMIN_GERENTE_ROLES,
+        # "can_manage_users":           ADMIN_GERENTE_ROLES,
     }
 
     for code in role_codes:
@@ -207,6 +208,50 @@ class IsAdminRole(BasePermission):
         return user_has_any_role(request.user, ["ADMIN"])
 
 
+class CanEditRoles(BasePermission):
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return user_has_permission_key(request.user, "can_edit_roles")
+
+
+class CanManageUserProfilesAndRoles(BasePermission):
+    """
+    Permisos para gestionar perfiles de usuarios y asignaciones de roles.
+    Permite:
+    - Lectura (GET): si tiene 'can_view_users'
+    - Creación (POST): si tiene 'can_create_users' o 'can_edit_users'
+    - Modificación (PUT/PATCH): si tiene 'can_edit_users'
+    - Eliminación (DELETE): si tiene 'can_edit_users' o 'can_delete_users'
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_users"
+
+        elif request.method == "POST":
+            return (
+                user_has_permission_key(request.user, "can_create_users") or
+                user_has_permission_key(request.user, "can_edit_users")
+            )
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_users"
+
+        elif request.method == "DELETE":
+            return (
+                user_has_permission_key(request.user, "can_edit_users") or
+                user_has_permission_key(request.user, "can_delete_users")
+            )
+
+        else:
+            return False
+
+        return user_has_permission_key(request.user, permission_key)
+
+
 class IsAdminOrGerente(HasAnyRole):
     allowed_roles = ["ADMIN", "GERENTE"]
 
@@ -238,9 +283,31 @@ class CanManageCatalogs(PermissionKeyRequired):
     write_key = "can_manage_catalogs"
 
 
-class CanManageProducts(PermissionKeyRequired):
-    read_key  = "can_view_products"
-    write_key = "can_manage_products"
+class CanManageProducts(BasePermission):
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_products"
+
+        elif request.method == "POST":
+            permission_key = "can_create_products"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_products"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_products"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
 
 
 class CanManageSuppliers(BasePermission):
@@ -282,7 +349,10 @@ class CanManageInventory(BasePermission):
             return False
 
         if request.method in SAFE_METHODS:
-            permission_key = "can_view_inventory"
+            return (
+                user_has_permission_key(request.user, "can_view_inventory") or
+                user_has_permission_key(request.user, "can_view_warehouses")
+            )
 
         elif request.method == "POST":
             permission_key = "can_create_inventory"
@@ -308,7 +378,10 @@ class CanManageWarehouses(BasePermission):
             return False
 
         if request.method in SAFE_METHODS:
-            permission_key = "can_view_warehouses"
+            return (
+                user_has_permission_key(request.user, "can_view_warehouses") or
+                user_has_permission_key(request.user, "can_view_inventory")
+            )
 
         elif request.method == "POST":
             permission_key = "can_create_warehouses"
@@ -761,6 +834,28 @@ class CanViewAudit(PermissionKeyRequired):
     write_key = "can_view_audit"
 
 
-class CanManageOrganizations(PermissionKeyRequired):
-    read_key  = "can_view_organizations"
-    write_key = "can_manage_organizations"
+class CanManageOrganizations(BasePermission):
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_organizations"
+
+        elif request.method == "POST":
+            permission_key = "can_create_organizations"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_organizations"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_organizations"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )

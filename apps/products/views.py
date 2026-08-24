@@ -66,10 +66,12 @@ class BranchProductViewSet(BaseModelViewSet):
     queryset = BranchProduct.objects.select_related(
         "branch",
         "product",
+        "product__category",
+        "product__unit",
         "cost_center",
     ).all()
     serializer_class = BranchProductSerializer
-    permission_classes = [CanManageCatalogs]
+    permission_classes = [CanManageProducts]
     filterset_class = BranchProductFilter
 
     search_fields = ["branch__name", "product__name", "product__internal_code"]

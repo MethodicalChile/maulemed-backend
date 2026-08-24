@@ -11,7 +11,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import IsAdminRole
+from apps.common.permissions import IsAdminRole, CanEditRoles, CanManageUserProfilesAndRoles
 from apps.common.responses import api_response, api_error
 from apps.common.permissions import user_has_permission_key
 from apps.common.responses import api_response as _ok
@@ -610,7 +610,7 @@ class RoleViewSet(BaseModelViewSet):
 class UserProfileViewSet(BaseModelViewSet):
     queryset = UserProfile.objects.select_related("user", "organization").order_by("id")
     serializer_class = UserProfileSerializer
-    permission_classes = [IsAdminRole]
+    permission_classes = [CanManageUserProfilesAndRoles]
 
 
 class UserRoleAssignmentViewSet(BaseModelViewSet):
@@ -618,7 +618,7 @@ class UserRoleAssignmentViewSet(BaseModelViewSet):
         "user", "role", "organization", "legal_entity", "branch",
     ).order_by("id")
     serializer_class = UserRoleAssignmentSerializer
-    permission_classes = [IsAdminRole]
+    permission_classes = [CanManageUserProfilesAndRoles]
     filterset_fields = ["user", "role", "organization", "branch", "is_active"]
 
 
@@ -707,77 +707,7 @@ def role_permissions_matrix(request):
     # ── Defaults granulares del sistema ───────────────────────────────────────
 
     ADMIN_GERENTE = {
-        "ADMIN",
-        "GERENTE",
-    }
-
-    ADMIN_GER_ABAST = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-    }
-
-    CATALOG_READERS = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "FINANZAS",
-        "BODEGUERO",
-        "JEFA_SUCURSAL",
-        "SECRETARIA",
-        "TENS",
-        "TECNOLOGA_MEDICA",
-        "DOCTOR",
-    }
-
-    SUP_READERS = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "FINANZAS",
-    }
-
-    INV_READERS = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "BODEGUERO",
-        "JEFA_SUCURSAL",
-        "SECRETARIA",
-        "TENS",
-        "TECNOLOGA_MEDICA",
-        "DOCTOR",
-    }
-
-    INV_WRITERS = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "BODEGUERO",
-        "JEFA_SUCURSAL",
-        "TENS",
-        "TECNOLOGA_MEDICA",
-    }
-
-    TRANSFER_ROLES = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "BODEGUERO",
-        "JEFA_SUCURSAL",
-        "TENS",
-        "TECNOLOGA_MEDICA",
-    }
-
-    PURCHASE_REQERS = {
-        "ADMIN",
-        "GERENTE",
-        "ABASTECIMIENTO",
-        "JEFA_SUCURSAL",
-        "SECRETARIA",
-        "TENS",
-        "TECNOLOGA_MEDICA",
-        "DOCTOR",
+        "ADMIN"
     }
 
     SYSTEM_DEFAULTS = {
@@ -788,102 +718,80 @@ def role_permissions_matrix(request):
         "can_view_organizations": ADMIN_GERENTE,
         "can_create_organizations": ADMIN_GERENTE,
         "can_edit_organizations": ADMIN_GERENTE,
-        "can_delete_organizations": {"ADMIN"},
+        "can_delete_organizations": ADMIN_GERENTE,
 
         # Productos
-        "can_view_products": CATALOG_READERS,
-        "can_create_products": ADMIN_GER_ABAST,
-        "can_edit_products": ADMIN_GER_ABAST,
-        "can_delete_products": ADMIN_GER_ABAST,
+        "can_view_products": ADMIN_GERENTE,
+        "can_create_products": ADMIN_GERENTE,
+        "can_edit_products": ADMIN_GERENTE,
+        "can_delete_products": ADMIN_GERENTE,
 
         # Proveedores
-        "can_view_suppliers": SUP_READERS,
-        "can_create_suppliers": ADMIN_GER_ABAST,
-        "can_edit_suppliers": ADMIN_GER_ABAST,
-        "can_delete_suppliers": ADMIN_GER_ABAST,
+        "can_view_suppliers": ADMIN_GERENTE,
+        "can_create_suppliers": ADMIN_GERENTE,
+        "can_edit_suppliers": ADMIN_GERENTE,
+        "can_delete_suppliers": ADMIN_GERENTE,
 
         # Inventario - movimientos
-        "can_view_inventory": INV_READERS,
-        "can_create_inventory": INV_WRITERS,
-        "can_edit_inventory": INV_WRITERS,
-        "can_delete_inventory": ADMIN_GER_ABAST,
+        "can_view_inventory": ADMIN_GERENTE,
+        "can_create_inventory": ADMIN_GERENTE,
+        "can_edit_inventory": ADMIN_GERENTE,
+        "can_delete_inventory": ADMIN_GERENTE,
 
         # Inventario - bodegas
-        "can_view_warehouses": INV_READERS,
-        "can_create_warehouses": INV_WRITERS,
-        "can_edit_warehouses": INV_WRITERS,
-        "can_delete_warehouses": ADMIN_GER_ABAST,
+        "can_view_warehouses": ADMIN_GERENTE,
+        "can_create_warehouses": ADMIN_GERENTE,
+        "can_edit_warehouses": ADMIN_GERENTE,
+        "can_delete_warehouses": ADMIN_GERENTE,
 
         # Compras — Solicitudes
-        "can_view_supply_requests": CATALOG_READERS,
-        "can_create_supply_request": PURCHASE_REQERS,
-        "can_edit_supply_request": ADMIN_GER_ABAST,
-        "can_approve_supply_request": ADMIN_GER_ABAST,
+        "can_view_supply_requests": ADMIN_GERENTE,
+        "can_create_supply_request": ADMIN_GERENTE,
+        "can_edit_supply_request": ADMIN_GERENTE,
+        "can_approve_supply_request": ADMIN_GERENTE,
 
         # Compras — Órdenes
-        "can_view_purchase_orders": SUP_READERS,
-        "can_create_purchase_orders": ADMIN_GER_ABAST,
-        "can_edit_purchase_orders": ADMIN_GER_ABAST,
+        "can_view_purchase_orders": ADMIN_GERENTE,
+        "can_create_purchase_orders": ADMIN_GERENTE,
+        "can_edit_purchase_orders": ADMIN_GERENTE,
         "can_delete_purchase_orders": ADMIN_GERENTE,
-        "can_receive_purchase": INV_WRITERS,
+        "can_receive_purchase": ADMIN_GERENTE,
 
         # Carga de documentos
-        "can_access_document_preview": {
-            "ADMIN",
-            "GERENTE",
-        },
+        "can_access_document_preview": ADMIN_GERENTE,
 
         # Traspasos
-        "can_view_transfers": TRANSFER_ROLES,
-        "can_create_transfers": TRANSFER_ROLES,
-        "can_edit_transfers": TRANSFER_ROLES,
-        "can_delete_transfers": ADMIN_GER_ABAST,
+        "can_view_transfers": ADMIN_GERENTE,
+        "can_create_transfers": ADMIN_GERENTE,
+        "can_edit_transfers": ADMIN_GERENTE,
+        "can_delete_transfers": ADMIN_GERENTE,
 
         # Finanzas
-        "can_view_finance": {
-            "ADMIN",
-            "GERENTE",
-            "FINANZAS",
-        },
-        "can_create_finance": {
-            "ADMIN",
-            "GERENTE",
-            "FINANZAS",
-        },
-        "can_edit_finance": {
-            "ADMIN",
-            "GERENTE",
-            "FINANZAS",
-        },
+        "can_view_finance": ADMIN_GERENTE,
+        "can_create_finance": ADMIN_GERENTE,
+        "can_edit_finance": ADMIN_GERENTE,
         "can_delete_finance": ADMIN_GERENTE,
 
         # Evaluaciones
-        "can_view_evaluations": set(role_codes),
+        "can_view_evaluations": ADMIN_GERENTE,
         "can_create_evaluations": ADMIN_GERENTE,
         "can_edit_evaluations": ADMIN_GERENTE,
-        "can_delete_evaluations": {"ADMIN"},
+        "can_delete_evaluations": ADMIN_GERENTE,
 
         # Reportes
-        "can_view_reports": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-            "FINANZAS",
-            "BODEGUERO",
-            "JEFA_SUCURSAL",
-        },
+        "can_view_reports": ADMIN_GERENTE,
 
         # Usuarios
-        "can_view_users": {"ADMIN"},
-        "can_create_users": {"ADMIN"},
-        "can_edit_users": {"ADMIN"},
-        "can_delete_users": {"ADMIN"},
+        "can_view_users": ADMIN_GERENTE,
+        "can_create_users": ADMIN_GERENTE,
+        "can_edit_users": ADMIN_GERENTE,
+        "can_delete_users": ADMIN_GERENTE,
 
         # Roles
-        "can_view_roles": {"ADMIN"},
-        "can_create_roles": {"ADMIN"},
-        "can_edit_roles": {"ADMIN"},
-        "can_delete_roles": {"ADMIN"},
+        "can_view_roles": ADMIN_GERENTE,
+        "can_create_roles": ADMIN_GERENTE,
+        "can_edit_roles": ADMIN_GERENTE,
+        "can_delete_roles": ADMIN_GERENTE,
 
         # Auditoría
         "can_view_audit": ADMIN_GERENTE,
@@ -1306,7 +1214,7 @@ def role_permissions_matrix(request):
     )
 
 @api_view(["POST"])
-@permission_classes([IsAdminRole])
+@permission_classes([CanEditRoles])
 def update_role_permission(request):
     """
     Activa o desactiva un permiso para un rol.
@@ -1372,14 +1280,6 @@ def me(request):
 
     # Defaults granulares para roles sin configuración en BD
     ADMIN_GERENTE   = {"ADMIN", "GERENTE"}
-    ADMIN_GER_ABAST = {"ADMIN", "GERENTE", "ABASTECIMIENTO"}
-    CATALOG_READERS = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    SUP_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS"}
-    INV_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    INV_WRITERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    TRANSFER_ROLES  = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    PURCHASE_REQERS = {"ADMIN","GERENTE","ABASTECIMIENTO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    FINANCE_ROLES   = {"ADMIN","GERENTE","FINANZAS"}
 
     DEFAULTS = {
         "can_view_dashboard":         set(role_codes),
@@ -1387,124 +1287,73 @@ def me(request):
         "can_view_organizations":     ADMIN_GERENTE,
         "can_create_organizations":   ADMIN_GERENTE,
         "can_edit_organizations":     ADMIN_GERENTE,
-        "can_delete_organizations":   {"ADMIN"},
+        "can_delete_organizations":   ADMIN_GERENTE,
         # Productos
-        "can_view_products":          CATALOG_READERS,
-        "can_create_products":        ADMIN_GER_ABAST,
-        "can_edit_products":          ADMIN_GER_ABAST,
-        "can_delete_products":        ADMIN_GER_ABAST,
+        "can_view_products":          ADMIN_GERENTE,
+        "can_create_products":        ADMIN_GERENTE,
+        "can_edit_products":          ADMIN_GERENTE,
+        "can_delete_products":        ADMIN_GERENTE,
         # Proveedores
-        "can_view_suppliers":         SUP_READERS,
-        "can_create_suppliers":       ADMIN_GER_ABAST,
-        "can_edit_suppliers":         ADMIN_GER_ABAST,
-        "can_delete_suppliers":       ADMIN_GER_ABAST,
+        "can_view_suppliers":         ADMIN_GERENTE,
+        "can_create_suppliers":       ADMIN_GERENTE,
+        "can_edit_suppliers":         ADMIN_GERENTE,
+        "can_delete_suppliers":       ADMIN_GERENTE,
         # Inventario
-        "can_view_inventory":         INV_READERS,
-        "can_create_inventory":       INV_WRITERS,
-        "can_edit_inventory":         INV_WRITERS,
-        "can_delete_inventory":       ADMIN_GER_ABAST,
+        "can_view_inventory":         ADMIN_GERENTE,
+        "can_create_inventory":       ADMIN_GERENTE,
+        "can_edit_inventory":         ADMIN_GERENTE,
+        "can_delete_inventory":       ADMIN_GERENTE,
         # Compras — solicitudes
-        "can_view_supply_requests":   CATALOG_READERS,
-        "can_create_supply_request":  PURCHASE_REQERS,
-        "can_edit_supply_request":    ADMIN_GER_ABAST,
-        "can_approve_supply_request": ADMIN_GER_ABAST,
+        "can_view_supply_requests":   ADMIN_GERENTE,
+        "can_create_supply_request":  ADMIN_GERENTE,
+        "can_edit_supply_request":    ADMIN_GERENTE,
+        "can_approve_supply_request": ADMIN_GERENTE,
         # Compras — órdenes
-        "can_view_purchase_orders":   SUP_READERS,
-        "can_create_purchase_orders": ADMIN_GER_ABAST,
-        "can_edit_purchase_orders":   ADMIN_GER_ABAST,
+        "can_view_purchase_orders":   ADMIN_GERENTE,
+        "can_create_purchase_orders": ADMIN_GERENTE,
+        "can_edit_purchase_orders":   ADMIN_GERENTE,
         "can_delete_purchase_orders": ADMIN_GERENTE,
-        "can_receive_purchase":       INV_WRITERS,
+        "can_receive_purchase":       ADMIN_GERENTE,
         # Compras — recepciones
-        "can_view_purchase_receipts": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-            "BODEGUERO",
-            "JEFA_SUCURSAL",
-        },
-
-        "can_create_purchase_receipts": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-            "BODEGUERO",
-            "JEFA_SUCURSAL",
-        },
-
-        "can_edit_purchase_receipts": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-        },
-
-        "can_delete_purchase_receipts": {
-            "ADMIN",
-            "GERENTE",
-        },
-
-        "can_process_purchase_receipts": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-            "BODEGUERO",
-        },
-
+        "can_view_purchase_receipts": ADMIN_GERENTE,
+        "can_create_purchase_receipts": ADMIN_GERENTE,
+        "can_edit_purchase_receipts": ADMIN_GERENTE,
+        "can_delete_purchase_receipts": ADMIN_GERENTE,
+        "can_process_purchase_receipts": ADMIN_GERENTE,
         # Compras — reclamos
-        "can_view_supplier_claims": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-            "FINANZAS",
-        },
-
-        "can_create_supplier_claims": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-        },
-
-        "can_edit_supplier_claims": {
-            "ADMIN",
-            "GERENTE",
-            "ABASTECIMIENTO",
-        },
-
-        "can_delete_supplier_claims": {
-            "ADMIN",
-            "GERENTE",
-        },
+        "can_view_supplier_claims": ADMIN_GERENTE,
+        "can_create_supplier_claims": ADMIN_GERENTE,
+        "can_edit_supplier_claims": ADMIN_GERENTE,
+        "can_delete_supplier_claims": ADMIN_GERENTE,
         # Carga de documentos
-        "can_access_document_preview": {
-            "ADMIN",
-            "GERENTE",
-        },
+        "can_access_document_preview": ADMIN_GERENTE,
         # Traspasos
-        "can_view_transfers":         TRANSFER_ROLES,
-        "can_create_transfers":       TRANSFER_ROLES,
-        "can_edit_transfers":         TRANSFER_ROLES,
-        "can_delete_transfers":       ADMIN_GER_ABAST,
+        "can_view_transfers":         ADMIN_GERENTE,
+        "can_create_transfers":       ADMIN_GERENTE,
+        "can_edit_transfers":         ADMIN_GERENTE,
+        "can_delete_transfers":       ADMIN_GERENTE,
         # Finanzas
-        "can_view_finance":           FINANCE_ROLES,
-        "can_create_finance":         FINANCE_ROLES,
-        "can_edit_finance":           FINANCE_ROLES,
+        "can_view_finance":           ADMIN_GERENTE,
+        "can_create_finance":         ADMIN_GERENTE,
+        "can_edit_finance":           ADMIN_GERENTE,
         "can_delete_finance":         ADMIN_GERENTE,
         # Evaluaciones
-        "can_view_evaluations":       {"ADMIN", "GERENTE"},
-        "can_create_evaluations":     {"ADMIN", "GERENTE"},
-        "can_edit_evaluations":       {"ADMIN", "GERENTE"},
-        "can_delete_evaluations":     {"ADMIN"},
+        "can_view_evaluations":       ADMIN_GERENTE,
+        "can_create_evaluations":     ADMIN_GERENTE,
+        "can_edit_evaluations":       ADMIN_GERENTE,
+        "can_delete_evaluations":     ADMIN_GERENTE,
         # Reportes
-        "can_view_reports":           {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL"},
+        "can_view_reports":           ADMIN_GERENTE,
         # Usuarios
-        "can_view_users":             {"ADMIN"},
-        "can_create_users":           {"ADMIN"},
-        "can_edit_users":             {"ADMIN"},
-        "can_delete_users":           {"ADMIN"},
+        "can_view_users":             ADMIN_GERENTE,
+        "can_create_users":           ADMIN_GERENTE,
+        "can_edit_users":             ADMIN_GERENTE,
+        "can_delete_users":           ADMIN_GERENTE,
         # Roles
-        "can_view_roles":             {"ADMIN"},
-        "can_create_roles":           {"ADMIN"},
-        "can_edit_roles":             {"ADMIN"},
-        "can_delete_roles":           {"ADMIN"},
+        "can_view_roles":             ADMIN_GERENTE,
+        "can_create_roles":           ADMIN_GERENTE,
+        "can_edit_roles":             ADMIN_GERENTE,
+        "can_delete_roles":           ADMIN_GERENTE,
         # Auditoría
         "can_view_audit":             ADMIN_GERENTE,
     }
@@ -1543,67 +1392,27 @@ def me(request):
         "can_edit_warehouses":        user_has_perm("can_edit_warehouses"),
         "can_delete_warehouses":      user_has_perm("can_delete_warehouses"),
         # Compras — Solicitudes
-        "can_view_supply_requests": user_has_perm(
-            "can_view_supply_requests"
-        ),
-        "can_create_supply_request": user_has_perm(
-            "can_create_supply_request"
-        ),
-        "can_edit_supply_request": user_has_perm(
-            "can_edit_supply_request"
-        ),
-        "can_approve_supply_request": user_has_perm(
-            "can_approve_supply_request"
-        ),
-
+        "can_view_supply_requests": user_has_perm("can_view_supply_requests"),
+        "can_create_supply_request": user_has_perm("can_create_supply_request"),
+        "can_edit_supply_request": user_has_perm("can_edit_supply_request"),
+        "can_approve_supply_request": user_has_perm("can_approve_supply_request"),
         # Compras — Órdenes
-        "can_view_purchase_orders": user_has_perm(
-            "can_view_purchase_orders"
-        ),
-        "can_create_purchase_orders": user_has_perm(
-            "can_create_purchase_orders"
-        ),
-        "can_edit_purchase_orders": user_has_perm(
-            "can_edit_purchase_orders"
-        ),
-        "can_delete_purchase_orders": user_has_perm(
-            "can_delete_purchase_orders"
-        ),
-        "can_receive_purchase": user_has_perm(
-            "can_receive_purchase"
-        ),
-
+        "can_view_purchase_orders": user_has_perm("can_view_purchase_orders"),
+        "can_create_purchase_orders": user_has_perm("can_create_purchase_orders"),
+        "can_edit_purchase_orders": user_has_perm("can_edit_purchase_orders"),
+        "can_delete_purchase_orders": user_has_perm("can_delete_purchase_orders"),
+        "can_receive_purchase": user_has_perm("can_receive_purchase"),
         # Compras — Recepciones
-        "can_view_purchase_receipts": user_has_perm(
-            "can_view_purchase_receipts"
-        ),
-        "can_create_purchase_receipts": user_has_perm(
-            "can_create_purchase_receipts"
-        ),
-        "can_edit_purchase_receipts": user_has_perm(
-            "can_edit_purchase_receipts"
-        ),
-        "can_delete_purchase_receipts": user_has_perm(
-            "can_delete_purchase_receipts"
-        ),
-        "can_process_purchase_receipts": user_has_perm(
-            "can_process_purchase_receipts"
-        ),
-
+        "can_view_purchase_receipts": user_has_perm("can_view_purchase_receipts"),
+        "can_create_purchase_receipts": user_has_perm("can_create_purchase_receipts"),
+        "can_edit_purchase_receipts": user_has_perm("can_edit_purchase_receipts"),
+        "can_delete_purchase_receipts": user_has_perm( "can_delete_purchase_receipts"),
+        "can_process_purchase_receipts": user_has_perm("can_process_purchase_receipts"),
         # Compras — Reclamos
-        "can_view_supplier_claims": user_has_perm(
-            "can_view_supplier_claims"
-        ),
-        "can_create_supplier_claims": user_has_perm(
-            "can_create_supplier_claims"
-        ),
-        "can_edit_supplier_claims": user_has_perm(
-            "can_edit_supplier_claims"
-        ),
-        "can_delete_supplier_claims": user_has_perm(
-            "can_delete_supplier_claims"
-        ),
-
+        "can_view_supplier_claims": user_has_perm("can_view_supplier_claims"),
+        "can_create_supplier_claims": user_has_perm("can_create_supplier_claims"),
+        "can_edit_supplier_claims": user_has_perm("can_edit_supplier_claims"),
+        "can_delete_supplier_claims": user_has_perm("can_delete_supplier_claims"),
         # Traspasos
         "can_view_transfers":         user_has_perm("can_view_transfers"),
         "can_create_transfers":       user_has_perm("can_create_transfers"),
@@ -1615,9 +1424,7 @@ def me(request):
         "can_edit_finance":           user_has_perm("can_edit_finance"),
         "can_delete_finance":         user_has_perm("can_delete_finance"),
         # Carga de documentos
-        "can_access_document_preview": user_has_perm(
-            "can_access_document_preview"
-        ),
+        "can_access_document_preview": user_has_perm("can_access_document_preview"),
         # Evaluaciones
         "can_view_evaluations":       user_has_perm("can_view_evaluations"),
         "can_create_evaluations":     user_has_perm("can_create_evaluations"),
@@ -1635,7 +1442,6 @@ def me(request):
         "can_create_users":           user_has_perm("can_create_users"),
         "can_edit_users":             user_has_perm("can_edit_users"),
         "can_delete_users":           user_has_perm("can_delete_users"),
-
         # Roles
         "can_view_roles":             user_has_perm("can_view_roles"),
         "can_create_roles":           user_has_perm("can_create_roles"),
@@ -1644,15 +1450,15 @@ def me(request):
         # Auditoría
         "can_view_audit":             user_has_perm("can_view_audit"),
         # Legacy — mantenidos para compatibilidad con el router existente
-        "can_manage_catalogs":        user_has_perm("can_edit_products"),
-        "can_view_catalogs":          user_has_perm("can_view_products"),
-        "can_manage_suppliers":       user_has_perm("can_edit_suppliers"),
-        "can_manage_inventory":       user_has_perm("can_edit_inventory"),
-        "can_manage_purchase_orders": user_has_perm("can_edit_purchase_orders"),
-        "can_manage_transfers":       user_has_perm("can_edit_transfers"),
-        "can_manage_finance":         user_has_perm("can_edit_finance"),
+        # "can_manage_catalogs":        user_has_perm("can_edit_products"),
+        # "can_view_catalogs":          user_has_perm("can_view_products"),
+        # "can_manage_suppliers":       user_has_perm("can_edit_suppliers"),
+        # "can_manage_inventory":       user_has_perm("can_edit_inventory"),
+        # "can_manage_purchase_orders": user_has_perm("can_edit_purchase_orders"),
+        # "can_manage_transfers":       user_has_perm("can_edit_transfers"),
+        # "can_manage_finance":         user_has_perm("can_edit_finance"),
         "can_manage_users":           is_admin,
-        "can_manage_organizations":   user_has_perm("can_edit_organizations"),
+        # "can_manage_organizations":   user_has_perm("can_edit_organizations"),
     }
 
     menu = [

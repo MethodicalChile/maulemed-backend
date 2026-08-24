@@ -6,9 +6,13 @@ from apps.organizations.serializers import (
     LegalEntitySmallSerializer,
     CostCenterSmallSerializer,
 )
+from apps.organizations.models import Branch, LegalEntity, CostCenter
 from apps.products.serializers import ProductSmallSerializer
+from apps.products.models import Product
 from apps.suppliers.serializers import SupplierSmallSerializer
+from apps.suppliers.models import Supplier
 from apps.inventory.serializers import WarehouseSmallSerializer
+from apps.inventory.models import Warehouse
 
 from .models import (
     SupplyRequest,
@@ -46,6 +50,14 @@ class PurchaseReceiptSmallSerializer(serializers.ModelSerializer):
 
 
 class SupplyRequestItemSerializer(serializers.ModelSerializer):
+    supply_request = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=SupplyRequest.objects.all(),
+    )
+    product = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Product.objects.all(),
+    )
     product_detail = ProductSmallSerializer(source="product", read_only=True)
 
     class Meta:
@@ -54,6 +66,22 @@ class SupplyRequestItemSerializer(serializers.ModelSerializer):
 
 
 class SupplyRequestSerializer(serializers.ModelSerializer):
+    branch = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Branch.objects.all(),
+    )
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    cost_center = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=CostCenter.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     branch_detail = BranchSmallSerializer(source="branch", read_only=True)
     legal_entity_detail = LegalEntitySmallSerializer(source="legal_entity", read_only=True)
     cost_center_detail = CostCenterSmallSerializer(source="cost_center", read_only=True)
@@ -70,6 +98,14 @@ class SupplyRequestSerializer(serializers.ModelSerializer):
 
 
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+    purchase_order = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=PurchaseOrder.objects.all(),
+    )
+    product = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Product.objects.all(),
+    )
     product_detail = ProductSmallSerializer(source="product", read_only=True)
 
     pending_quantity = serializers.DecimalField(
@@ -84,6 +120,32 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
+    supplier = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Supplier.objects.all(),
+    )
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    branch = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Branch.objects.all(),
+    )
+    cost_center = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=CostCenter.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    supply_request = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=SupplyRequest.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
     legal_entity_detail = LegalEntitySmallSerializer(source="legal_entity", read_only=True)
     branch_detail = BranchSmallSerializer(source="branch", read_only=True)
@@ -101,6 +163,14 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
 
 class PurchaseReceiptItemSerializer(serializers.ModelSerializer):
+    purchase_receipt = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=PurchaseReceipt.objects.all(),
+    )
+    product = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Product.objects.all(),
+    )
     product_detail = ProductSmallSerializer(source="product", read_only=True)
 
     class Meta:
@@ -109,6 +179,18 @@ class PurchaseReceiptItemSerializer(serializers.ModelSerializer):
 
 
 class PurchaseReceiptSerializer(serializers.ModelSerializer):
+    purchase_order = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=PurchaseOrder.objects.all(),
+    )
+    branch = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Branch.objects.all(),
+    )
+    warehouse = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Warehouse.objects.all(),
+    )
     purchase_order_detail = PurchaseOrderSmallSerializer(source="purchase_order", read_only=True)
     branch_detail = BranchSmallSerializer(source="branch", read_only=True)
     warehouse_detail = WarehouseSmallSerializer(source="warehouse", read_only=True)
@@ -122,6 +204,18 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
 
 
 class SupplierClaimSerializer(serializers.ModelSerializer):
+    purchase_receipt = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=PurchaseReceipt.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    supplier = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Supplier.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     purchase_receipt_detail = PurchaseReceiptSmallSerializer(source="purchase_receipt", read_only=True)
     supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
     created_by_detail = UserSerializer(source="created_by", read_only=True)

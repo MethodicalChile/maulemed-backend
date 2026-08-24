@@ -798,4 +798,6 @@ class SupplierClaimViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return apply_branch_scope(qs, self.request.user, branch_field="purchase_receipt__branch")
+        # Permitir ver reclamos globales (sin receipt o sin branch) incluso con scope
+        return apply_branch_scope(qs, self.request.user, branch_field="purchase_receipt__branch") | \
+               SupplierClaim.objects.filter(purchase_receipt__isnull=True)

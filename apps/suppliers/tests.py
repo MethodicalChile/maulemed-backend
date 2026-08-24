@@ -185,8 +185,8 @@ class SupplierProductTests(BaseSupplierTest):
         response = self.client.post(
             "/api/supplier-products/",
             {
-                "supplier": self.supplier.id,
-                "product": self.product.id,
+                "supplier": str(self.supplier.uuid),
+                "product": str(self.product.uuid),
                 "last_price": "1500.00",
                 "currency": "CLP",
                 "is_active": True,
@@ -205,8 +205,8 @@ class SupplierProductTests(BaseSupplierTest):
         response = self.client.post(
             "/api/supplier-products/",
             {
-                "supplier": self.supplier.id,
-                "product": self.product.id,
+                "supplier": str(self.supplier.uuid),
+                "product": str(self.product.uuid),
                 "is_active": True,
             },
             format="json",
@@ -245,7 +245,7 @@ class SupplierProductPriceTests(BaseSupplierTest):
         response = self.client.post(
             "/api/supplier-product-prices/",
             {
-                "supplier_product": self.supplier_product.id,
+                "supplier_product": str(self.supplier_product.uuid),
                 "price": "2500.00",
                 "currency": "CLP",
                 "valid_from": str(date.today()),

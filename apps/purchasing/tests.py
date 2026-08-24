@@ -137,8 +137,8 @@ class SupplyRequestTests(BaseAPITest):
         response = self.client.post(
             "/api/supply-requests/",
             {
-                "branch": self.branch.id,
-                "legal_entity": self.le.id,
+                "branch": str(self.branch.uuid),
+                "legal_entity": str(self.le.uuid),
                 "period_year": 2024,
                 "period_month": 6,
             },
@@ -219,7 +219,7 @@ class SupplyRequestTests(BaseAPITest):
     def test_sin_autenticacion_no_puede_crear_solicitud(self):
         response = self.client.post(
             "/api/supply-requests/",
-            {"branch": self.branch.id, "period_year": 2024, "period_month": 6},
+            {"branch": str(self.branch.uuid), "period_year": 2024, "period_month": 6},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -295,9 +295,9 @@ class PurchaseOrderTests(BaseAPITest):
             "/api/purchase-orders/",
             {
                 "order_number": "OC-TEST-001",
-                "supplier": self.supplier.id,
-                "branch": self.branch.id,
-                "legal_entity": self.le.id,
+                "supplier": str(self.supplier.uuid),
+                "branch": str(self.branch.uuid),
+                "legal_entity": str(self.le.uuid),
                 "status": "BORRADOR",
                 "subtotal_amount": "1000.00",
                 "tax_amount": "190.00",
@@ -403,9 +403,9 @@ class PurchaseReceiptTests(BaseAPITest):
         response = self.client.post(
             "/api/purchase-receipts/",
             {
-                "purchase_order": po.id,
-                "branch": self.branch.id,
-                "warehouse": self.warehouse.id,
+                "purchase_order": str(po.uuid),
+                "branch": str(self.branch.uuid),
+                "warehouse": str(self.warehouse.uuid),
                 "status": "RECIBIDO_OK",
             },
             format="json",
@@ -451,8 +451,8 @@ class SupplierClaimTests(BaseAPITest):
         response = self.client.post(
             "/api/supplier-claims/",
             {
-                "purchase_receipt": self.receipt.id,
-                "supplier": self.supplier.id,
+                "purchase_receipt": str(self.receipt.uuid),
+                "supplier": str(self.supplier.uuid),
                 "claim_type": SupplierClaim.CLAIM_CREDIT_NOTE,
                 "status": SupplierClaim.STATUS_OPEN,
                 "description": "Producto dañado al llegar",

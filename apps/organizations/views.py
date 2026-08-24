@@ -33,6 +33,20 @@ class OrganizationViewSet(BaseModelViewSet):
             return qs
         return apply_organization_scope(qs, self.request.user, organization_field="self")
 
+    def perform_create(self, serializer):
+        org = serializer.save()
+        user = self.request.user
+        if not user_is_global(user):
+            from apps.accounts.models import UserRoleAssignment
+            active_assignments = user.role_assignments.filter(is_active=True)
+            for assignment in active_assignments:
+                UserRoleAssignment.objects.get_or_create(
+                    user=user,
+                    role=assignment.role,
+                    organization=org,
+                    defaults={"is_active": True}
+                )
+
 
 class LegalEntityViewSet(BaseModelViewSet):
     queryset = LegalEntity.objects.select_related("organization").all().order_by("name")
