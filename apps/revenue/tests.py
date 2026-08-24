@@ -831,3 +831,86 @@ class ImportarDepositosRealTests(TestCase):
 
         self.assertEqual(collection.total_amount, Decimal("946096"))
         self.assertEqual(collection.copay_amount, Decimal("673496"))
+
+
+# ---------------------------------------------------------------------------
+# Seed de demo
+# ---------------------------------------------------------------------------
+
+class SeedDemoFinanzasTests(TestCase):
+
+    def test_seed_crea_financiadores_y_sus_grafias(self):
+        from django.core.management import call_command
+
+        call_command("seed_demo_finanzas", verbosity=0)
+
+        self.assertEqual(Financier.objects.count(), 11)
+
+        # Las dos grafías de Linares apuntan al mismo financiador.
+        uno = FinancierAlias.resolve("MUNICIPALIDAD DE LINARES")
+        otro = FinancierAlias.resolve("MUNICIP. LINARES")
+        self.assertEqual(uno, otro)
+
+    def test_seed_no_inventa_razones_sociales(self):
+        """
+        Si el RUT del prestador no está cargado, lo reporta como faltante en vez
+        de crearlo: ensuciar el maestro haría irreconocible qué es dato real.
+        """
+        from django.core.management import call_command
+
+        call_command("seed_demo_finanzas", verbosity=0)
+
+        self.assertEqual(LegalEntity.objects.count(), 0)
+        self.assertEqual(LegalEntityAlias.objects.count(), 0)
+
+    def test_seed_liga_el_prestador_cuando_la_sociedad_existe(self):
+        from django.core.management import call_command
+
+        org = Organization.objects.create(name="MauleMed", is_active=True)
+        iral = LegalEntity.objects.create(
+            organization=org,
+            name="Instituto Radiológico Linares Ltda.",
+            rut="76869710-8",
+        )
+
+        call_command("seed_demo_finanzas", verbosity=0)
+
+        self.assertEqual(LegalEntityAlias.resolve("IRAL"), iral)
+
+    def test_seed_es_idempotente(self):
+        from django.core.management import call_command
+
+        call_command("seed_demo_finanzas", verbosity=0)
+        call_command("seed_demo_finanzas", verbosity=0)
+
+        self.assertEqual(Financier.objects.count(), 11)
+
+    def test_seed_carga_los_archivos_reales_si_se_le_pasa_la_carpeta(self):
+        from django.core.management import call_command
+
+        if not REPORTE_XLSX.exists():
+            self.skipTest(f"No está {REPORTES_DIR}")
+
+        org = Organization.objects.create(name="MauleMed", is_active=True)
+        for rut, nombre in (
+            ("76869710-8", "Instituto Radiológico Linares Ltda."),
+            ("76551640-4", "Soc. Médica y de Diagnóstico Maule Ltda."),
+        ):
+            LegalEntity.objects.create(
+                organization=org, name=nombre, rut=rut
+            )
+
+        call_command(
+            "seed_demo_finanzas",
+            reportes_dir=str(REPORTES_DIR),
+            verbosity=0,
+        )
+
+        batch = RevenueImportBatch.objects.first()
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch.rows_total, 37)
+
+        # IRAMA no está cargada como sociedad, así que sus filas quedan fuera y
+        # listadas — no se atribuyen a otra.
+        self.assertIn("IRAMA", batch.unmapped_providers)
+        self.assertEqual(batch.rows_imported, 21)
