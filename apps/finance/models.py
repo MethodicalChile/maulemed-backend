@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.core.exceptions import ValidationError
 
 from apps.common.models import BaseModel
@@ -111,6 +114,34 @@ class SupplierInvoice(BaseModel):
     def clean(self):
         if self.issue_date and self.due_date and self.due_date < self.issue_date:
             raise ValidationError("La fecha de vencimiento no puede ser anterior a la fecha de emisión.")
+
+    def save(self, *args, **kwargs):
+        # Vencimiento derivado del plazo pactado con el proveedor. Sólo se
+        # calcula cuando viene vacío: si alguien escribió una fecha, esa manda
+        # — hay facturas que se pactan fuera de la política general.
+        if (
+            self.due_date is None
+            and self.issue_date is not None
+            and self.supplier_id is not None
+        ):
+            dias = getattr(self.supplier, "payment_terms_days", None)
+            if dias:
+                self.due_date = self.issue_date + timedelta(days=dias)
+
+        return super().save(*args, **kwargs)
+
+    @property
+    def days_to_due(self):
+        """Días hasta el vencimiento. Negativo si ya venció."""
+        if self.due_date is None:
+            return None
+        return (self.due_date - timezone.localdate()).days
+
+    @property
+    def is_overdue(self):
+        if self.due_date is None or self.status == self.STATUS_PAID:
+            return False
+        return self.due_date < timezone.localdate()
 
     def __str__(self):
         supplier_name = self.supplier.name if self.supplier else "Sin proveedor"

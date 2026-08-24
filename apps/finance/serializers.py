@@ -72,6 +72,8 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
     items = SupplierInvoiceItemSerializer(many=True, read_only=True)
     items_total_amount = serializers.SerializerMethodField()
     items_match_total = serializers.SerializerMethodField()
+    days_to_due = serializers.IntegerField(read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = SupplierInvoice

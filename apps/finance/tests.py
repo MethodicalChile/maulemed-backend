@@ -838,3 +838,76 @@ class SupplierInvoiceItemTests(TestCase):
         )
 
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# ---------------------------------------------------------------------------
+# C4 · Plazos de pago
+# ---------------------------------------------------------------------------
+
+class PaymentTermsTests(TestCase):
+    """
+    payment_terms era texto libre y due_date se llenaba a mano, así que el
+    plazo comprometido no era un dato consultable y el indicador "plazo
+    promedio entre recepción de la factura y pago" no se podía calcular.
+    """
+
+    def setUp(self):
+        _, self.le, self.branch = setup_org()
+        self.supplier = Supplier.objects.create(
+            name="Proveedor 30 días",
+            rut="77999888-1",
+            payment_terms="30 días fecha factura",
+            payment_terms_days=30,
+            is_active=True,
+        )
+
+    def _factura(self, **kwargs):
+        defaults = dict(
+            supplier=self.supplier,
+            legal_entity=self.le,
+            branch=self.branch,
+            invoice_number=f"F-{SupplierInvoice.objects.count() + 1}",
+            issue_date=date(2026, 8, 1),
+            total_amount=Decimal("50000"),
+        )
+        defaults.update(kwargs)
+        return SupplierInvoice.objects.create(**defaults)
+
+    def test_vencimiento_se_deriva_del_plazo_del_proveedor(self):
+        factura = self._factura()
+        self.assertEqual(factura.due_date, date(2026, 8, 31))
+
+    def test_fecha_escrita_a_mano_manda_sobre_el_plazo(self):
+        """Hay facturas que se pactan fuera de la política general."""
+        factura = self._factura(due_date=date(2026, 9, 15))
+        self.assertEqual(factura.due_date, date(2026, 9, 15))
+
+    def test_proveedor_sin_plazo_no_deriva_nada(self):
+        otro = Supplier.objects.create(
+            name="Proveedor sin plazo", rut="77111222-3", is_active=True
+        )
+        factura = self._factura(supplier=otro, invoice_number="F-SIN-PLAZO")
+        self.assertIsNone(factura.due_date)
+
+    def test_sin_fecha_de_emision_no_deriva_nada(self):
+        factura = self._factura(issue_date=None, invoice_number="F-SIN-EMISION")
+        self.assertIsNone(factura.due_date)
+
+    def test_vencida_e_impaga_se_marca(self):
+        factura = self._factura(
+            issue_date=date(2020, 1, 1),
+            invoice_number="F-VIEJA",
+            status=SupplierInvoice.STATUS_RECEIVED,
+        )
+
+        self.assertTrue(factura.is_overdue)
+        self.assertLess(factura.days_to_due, 0)
+
+    def test_vencida_pero_pagada_no_se_marca(self):
+        factura = self._factura(
+            issue_date=date(2020, 1, 1),
+            invoice_number="F-VIEJA-PAGADA",
+            status=SupplierInvoice.STATUS_PAID,
+        )
+
+        self.assertFalse(factura.is_overdue)
