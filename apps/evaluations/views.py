@@ -9,7 +9,11 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import IsAdminOrGerente
+from apps.common.permissions import (
+    CanManageEvaluations,
+    CanManageEvaluationQuestions,
+    user_has_permission_key,
+)
 from apps.common.responses import api_response, api_error
 
 from .models import (
@@ -37,13 +41,24 @@ User = get_user_model()
 # EvaluationFormViewSet
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ──────────────────────────────────────────────────────────────────────────────
+# EvaluationFormViewSet
+# ──────────────────────────────────────────────────────────────────────────────
+
 class EvaluationFormViewSet(BaseModelViewSet):
     """
     CRUD de plantillas de formulario de evaluación.
 
-    Permisos:
-    - list / retrieve / questions : IsAuthenticated
-    - create / update / delete / publish / toggle : IsAdminOrGerente
+    Permisos granulares:
+    - list / retrieve / questions / qr / responses_summary
+        -> can_view_evaluations
+    - create
+        -> can_create_evaluations
+    - update / partial_update / toggle_active /
+      publish_google_form / resync_google_form / sync_responses
+        -> can_edit_evaluations
+    - destroy
+        -> can_delete_evaluations
     """
 
     queryset = (
@@ -57,9 +72,9 @@ class EvaluationFormViewSet(BaseModelViewSet):
     ordering_fields   = ["title", "created_at", "is_active", "google_synced_at"]
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve", "questions"):
-            return [IsAuthenticated()]
-        return [IsAdminOrGerente()]
+        return [
+            CanManageEvaluations()
+        ]
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -625,27 +640,51 @@ class EvaluationFormViewSet(BaseModelViewSet):
 
         return None
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # EvaluationFormQuestionViewSet
 # ──────────────────────────────────────────────────────────────────────────────
 
 class EvaluationFormQuestionViewSet(BaseModelViewSet):
-    """CRUD de preguntas de formularios."""
+    """
+    CRUD de preguntas de formularios.
+
+    Permisos:
+    - GET          -> can_view_evaluations
+    - POST         -> can_create_evaluations
+    - PUT / PATCH  -> can_edit_evaluations
+    - DELETE       -> can_delete_evaluations
+    """
 
     queryset = (
         EvaluationFormQuestion.objects
-        .select_related("evaluation_form")
-        .order_by("evaluation_form", "order")
+        .select_related(
+            "evaluation_form"
+        )
+        .order_by(
+            "evaluation_form",
+            "order",
+        )
     )
-    serializer_class = EvaluationFormQuestionSerializer
-    filterset_fields = ["evaluation_form__uuid", "question_type", "is_required"]
-    ordering_fields  = ["order", "created_at"]
+
+    serializer_class = (
+        EvaluationFormQuestionSerializer
+    )
+
+    filterset_fields = [
+        "evaluation_form__uuid",
+        "question_type",
+        "is_required",
+    ]
+
+    ordering_fields = [
+        "order",
+        "created_at",
+    ]
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve"):
-            return [IsAuthenticated()]
-        return [IsAdminOrGerente()]
+        return [
+            CanManageEvaluationQuestions()
+        ]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -655,131 +694,378 @@ class EvaluationFormQuestionViewSet(BaseModelViewSet):
 class UserEvaluationViewSet(BaseModelViewSet):
     """
     Gestión de evaluaciones asignadas a usuarios.
-    - ADMIN/GERENTE: CRUD completo + asignar.
-    - Resto: solo ver sus propias evaluaciones.
+
+    Permisos administrativos:
+
+    - list / retrieve
+        -> can_view_evaluations
+
+    - create
+        -> can_create_evaluations
+
+    - update / partial_update
+        -> can_edit_evaluations
+
+    - destroy
+        -> can_delete_evaluations
+
+    Acciones personales:
+
+    - my_evaluations
+        -> cualquier usuario autenticado puede
+           consultar sus propias evaluaciones.
+
+    - submit
+        -> cualquier usuario autenticado puede
+           responder únicamente sus propias
+           evaluaciones.
+
+    El queryset garantiza que un usuario que no tenga
+    can_view_evaluations solo pueda acceder a registros
+    donde evaluated_user sea él mismo.
     """
 
     serializer_class = UserEvaluationSerializer
+
     filterset_fields = [
-        "status", "evaluation_form__uuid",
-        "evaluated_user", "source", "branch__uuid",
+        "status",
+        "evaluation_form__uuid",
+        "evaluated_user",
+        "source",
+        "branch__uuid",
     ]
-    search_fields   = [
+
+    search_fields = [
         "evaluated_user__username",
         "evaluated_user__first_name",
         "evaluation_form__title",
     ]
-    ordering_fields = ["created_at", "due_date", "score", "status"]
-    ordering        = ["-created_at"]
+
+    ordering_fields = [
+        "created_at",
+        "due_date",
+        "score",
+        "status",
+    ]
+
+    ordering = [
+        "-created_at"
+    ]
+
+    # =========================================================
+    # QUERYSET
+    # =========================================================
 
     def get_queryset(self):
         user = self.request.user
-        qs = UserEvaluation.objects.select_related(
-            "evaluation_form", "evaluated_user", "assigned_by", "branch",
-        ).prefetch_related("answers__question")
 
-        is_privileged = (
-            user.is_superuser
-            or user.role_assignments.filter(
-                is_active=True,
-                role__code__in=["ADMIN", "GERENTE"],
-            ).exists()
-        )
-        if not is_privileged:
-            # Usuarios normales ven sus propias evaluaciones
-            # + las respuestas anónimas de Google Forms de sus formularios
-            qs = qs.filter(evaluated_user=user)
-
-        return qs.order_by("-created_at")
-
-    def get_permissions(self):
-        if self.action in ("list", "retrieve", "my_evaluations", "submit"):
-            return [IsAuthenticated()]
-        return [IsAdminOrGerente()]
-
-    def perform_create(self, serializer):
-        serializer.save(assigned_by=self.request.user)
-
-    @action(detail=False, methods=["get"], url_path="my")
-    def my_evaluations(self, request):
-        """Evaluaciones del usuario autenticado."""
         qs = (
             UserEvaluation.objects
-            .filter(evaluated_user=request.user)
-            .select_related("evaluation_form")
-            .order_by("-created_at")
+            .select_related(
+                "evaluation_form",
+                "evaluated_user",
+                "assigned_by",
+                "branch",
+            )
+            .prefetch_related(
+                "answers__question"
+            )
         )
-        data = UserEvaluationSmallSerializer(qs, many=True).data
-        return api_response(data=data)
 
-    @action(detail=True, methods=["post"], url_path="submit")
-    def submit(self, request, uuid=None):
+        can_view_all = (
+            user_has_permission_key(
+                user,
+                "can_view_evaluations",
+            )
+        )
+
+        if not can_view_all:
+            """
+            Un usuario sin permiso administrativo
+            solamente puede acceder a sus propias
+            evaluaciones.
+
+            Esto también protege retrieve y submit,
+            porque self.get_object() trabaja sobre
+            este queryset.
+            """
+            qs = qs.filter(
+                evaluated_user=user
+            )
+
+        return qs.order_by(
+            "-created_at"
+        )
+
+    # =========================================================
+    # PERMISOS
+    # =========================================================
+
+    def get_permissions(self):
         """
-        Envía las respuestas de una evaluación y la marca como completada.
-        Calcula el score automáticamente para preguntas tipo RATING.
+        my_evaluations y submit son acciones personales.
+
+        No requieren can_view_evaluations ni
+        can_edit_evaluations porque responder una
+        evaluación propia no equivale a administrar
+        el módulo.
         """
+
+        if self.action in (
+            "my_evaluations",
+            "submit",
+        ):
+            return [
+                IsAuthenticated()
+            ]
+
+        return [
+            CanManageEvaluations()
+        ]
+
+    # =========================================================
+    # CREATE
+    # =========================================================
+
+    def perform_create(
+        self,
+        serializer,
+    ):
+        serializer.save(
+            assigned_by=self.request.user
+        )
+
+    # =========================================================
+    # MIS EVALUACIONES
+    # =========================================================
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="my",
+    )
+    def my_evaluations(
+        self,
+        request,
+    ):
+        """
+        Devuelve únicamente las evaluaciones
+        asignadas al usuario autenticado.
+        """
+
+        qs = (
+            UserEvaluation.objects
+            .filter(
+                evaluated_user=request.user
+            )
+            .select_related(
+                "evaluation_form"
+            )
+            .order_by(
+                "-created_at"
+            )
+        )
+
+        data = (
+            UserEvaluationSmallSerializer(
+                qs,
+                many=True,
+            ).data
+        )
+
+        return api_response(
+            data=data
+        )
+
+    # =========================================================
+    # RESPONDER EVALUACIÓN PROPIA
+    # =========================================================
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="submit",
+    )
+    def submit(
+        self,
+        request,
+        uuid=None,
+    ):
+        """
+        Envía las respuestas de una evaluación
+        perteneciente al usuario autenticado.
+
+        Calcula automáticamente el score para
+        preguntas de tipo RATING.
+        """
+
         evaluation = self.get_object()
 
-        if evaluation.status == UserEvaluation.STATUS_COMPLETED:
-            return api_error(message="Esta evaluación ya fue completada.", status_code=400)
+        if (
+            evaluation.status
+            == UserEvaluation.STATUS_COMPLETED
+        ):
+            return api_error(
+                message=(
+                    "Esta evaluación "
+                    "ya fue completada."
+                ),
+                status_code=400,
+            )
 
-        serializer = SubmitEvaluationSerializer(data=request.data)
+        serializer = (
+            SubmitEvaluationSerializer(
+                data=request.data
+            )
+        )
+
         if not serializer.is_valid():
-            return api_error(data=serializer.errors, message="Datos inválidos.")
+            return api_error(
+                data=serializer.errors,
+                message="Datos inválidos.",
+            )
 
-        answers_data = serializer.validated_data["answers"]
-        notes        = serializer.validated_data.get("notes")
+        answers_data = (
+            serializer.validated_data[
+                "answers"
+            ]
+        )
+
+        notes = (
+            serializer.validated_data.get(
+                "notes"
+            )
+        )
 
         questions = {
             str(q.uuid): q
-            for q in evaluation.evaluation_form.questions.all()
+            for q
+            in evaluation
+            .evaluation_form
+            .questions
+            .all()
         }
 
         rating_sum = 0
         rating_max = 0
 
-        for a in answers_data:
-            q_uuid = str(a["question"])
-            if q_uuid not in questions:
+        for answer in answers_data:
+            question_uuid = str(
+                answer[
+                    "question"
+                ]
+            )
+
+            if (
+                question_uuid
+                not in questions
+            ):
                 return api_error(
-                    message=f"La pregunta {q_uuid} no pertenece a este formulario.",
+                    message=(
+                        f"La pregunta "
+                        f"{question_uuid} "
+                        f"no pertenece a este "
+                        f"formulario."
+                    ),
                     status_code=400,
                 )
-            q = questions[q_uuid]
 
-            if q.question_type == "RATING" and a.get("answer_rating") is not None:
-                rating_sum += a["answer_rating"]
-                rating_max += (q.rating_max or 5)
+            question = questions[
+                question_uuid
+            ]
+
+            if (
+                question.question_type
+                == "RATING"
+                and answer.get(
+                    "answer_rating"
+                )
+                is not None
+            ):
+                rating_sum += (
+                    answer[
+                        "answer_rating"
+                    ]
+                )
+
+                rating_max += (
+                    question.rating_max
+                    or 5
+                )
 
             UserEvaluationAnswer.objects.update_or_create(
                 user_evaluation=evaluation,
-                question=q,
+                question=question,
                 defaults={
-                    "answer_text":    a.get("answer_text"),
-                    "answer_rating":  a.get("answer_rating"),
-                    "answer_options": a.get("answer_options"),
+                    "answer_text": (
+                        answer.get(
+                            "answer_text"
+                        )
+                    ),
+                    "answer_rating": (
+                        answer.get(
+                            "answer_rating"
+                        )
+                    ),
+                    "answer_options": (
+                        answer.get(
+                            "answer_options"
+                        )
+                    ),
                 },
             )
 
         score = None
-        if rating_max > 0:
-            score = round((rating_sum / rating_max) * 100, 2)
 
-        evaluation.status       = UserEvaluation.STATUS_COMPLETED
-        evaluation.completed_at = timezone.now()
-        evaluation.score        = score
+        if rating_max > 0:
+            score = round(
+                (
+                    rating_sum
+                    / rating_max
+                )
+                * 100,
+                2,
+            )
+
+        evaluation.status = (
+            UserEvaluation.STATUS_COMPLETED
+        )
+
+        evaluation.completed_at = (
+            timezone.now()
+        )
+
+        evaluation.score = score
+
         if notes:
             evaluation.notes = notes
-        evaluation.save(update_fields=["status", "completed_at", "score", "notes"])
+
+        evaluation.save(
+            update_fields=[
+                "status",
+                "completed_at",
+                "score",
+                "notes",
+            ]
+        )
 
         logger.info(
-            "Evaluación completada uuid=%s usuario=%s score=%s",
+            (
+                "Evaluación completada "
+                "uuid=%s usuario=%s "
+                "score=%s"
+            ),
             evaluation.uuid,
             evaluation.evaluated_user,
             score,
         )
 
         return api_response(
-            data=UserEvaluationSerializer(evaluation).data,
-            message="Evaluación completada correctamente.",
+            data=UserEvaluationSerializer(
+                evaluation
+            ).data,
+            message=(
+                "Evaluación completada "
+                "correctamente."
+            ),
         )

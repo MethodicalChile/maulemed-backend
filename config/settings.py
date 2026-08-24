@@ -37,6 +37,7 @@ SUPABASE_URL = config("SUPABASE_URL", default="")
 SUPABASE_SECRET_KEY = config("SUPABASE_SECRET_KEY", default="")
 
 SUPABASE_STORAGE_BUCKET = config("SUPABASE_STORAGE_BUCKET", default="MauleMed-Imagenes")
+API_KEY_GEMINI = config("API_KEY_GEMINI")
 
 # Application definition
 

@@ -71,7 +71,7 @@ class ProductSmallSerializer(serializers.ModelSerializer):
             "requires_expiration_date",
             "is_medication",
             "is_controlled",
-            "is_active",
+            "quality_rating",
         ]
 
     def get_image_url(self, product):
@@ -97,6 +97,7 @@ class UnitOfMeasureSerializer(serializers.ModelSerializer):
             "id",
             "deleted_at",
         ]
+
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -146,6 +147,11 @@ class ProductSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "image_path",
         ]
+
+    def validate_internal_code(self, value):
+        if value == "" or value is None:
+            return None
+        return value
 
     def get_image_url(self, product):
         if not product.image_path:

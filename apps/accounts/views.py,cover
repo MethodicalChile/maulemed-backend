@@ -142,7 +142,7 @@
 >     is_gerente = "GERENTE" in role_codes
   
 >     permissions = {
->         "can_view_dashboard": True,
+>         "can_view_dashboard": user_has_perm("can_view_dashboard"),
 >         "can_manage_catalogs": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
 >         "can_manage_suppliers": is_admin or is_gerente or "ABASTECIMIENTO" in role_codes,
 >         "can_view_inventory": is_admin or is_gerente or bool(

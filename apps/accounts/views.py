@@ -7,10 +7,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.viewsets import ViewSet
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import IsAuthenticated
 
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import IsAdminRole
+from apps.common.permissions import IsAdminRole, CanEditRoles, CanManageUserProfilesAndRoles
 from apps.common.responses import api_response, api_error
+from apps.common.permissions import user_has_permission_key
+from apps.common.responses import api_response as _ok
+from apps.audit.services import audit_action
 
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -85,13 +90,26 @@ class CustomTokenRefreshView(TokenRefreshView):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class UserManagementViewSet(ViewSet):
-    permission_classes = [IsAdminRole]
+    permission_classes = [IsAuthenticated]
+
+    def _check_user_permission(self, request, permission):
+        if not user_has_permission_key(request.user, permission):
+            raise PermissionDenied(
+                "No tienes permiso para realizar esta acción."
+            )
 
     def _user_detail(self, user):
         profile = getattr(user, "profile", None)
-        assignments = user.role_assignments.filter(is_active=True).select_related(
-            "role", "organization", "legal_entity", "branch"
+
+        assignments = user.role_assignments.filter(
+            is_active=True
+        ).select_related(
+            "role",
+            "organization",
+            "legal_entity",
+            "branch",
         )
+
         return {
             "id": user.id,
             "username": user.username,
@@ -102,142 +120,396 @@ class UserManagementViewSet(ViewSet):
             "is_active": user.is_active,
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
-            "profile": UserProfileSerializer(profile).data if profile else None,
-            "role_assignments": UserRoleAssignmentSerializer(assignments, many=True).data,
+            "profile": (
+                UserProfileSerializer(profile).data
+                if profile
+                else None
+            ),
+            "role_assignments": UserRoleAssignmentSerializer(
+                assignments,
+                many=True,
+            ).data,
         }
 
     def list(self, request):
+        self._check_user_permission(
+            request,
+            "can_view_users",
+        )
+
         qs = User.objects.prefetch_related(
-            "profile", "role_assignments__role",
-            "role_assignments__organization", "role_assignments__branch",
-        ).order_by("first_name", "last_name", "username")
+            "profile",
+            "role_assignments__role",
+            "role_assignments__organization",
+            "role_assignments__branch",
+        ).order_by(
+            "first_name",
+            "last_name",
+            "username",
+        )
 
         # Búsqueda por nombre, apellido, username o email
-        search = request.query_params.get("search", "").strip()
+        search = request.query_params.get(
+            "search",
+            "",
+        ).strip()
+
         if search:
             from django.db.models import Q
+
             qs = qs.filter(
-                Q(first_name__icontains=search) |
-                Q(last_name__icontains=search) |
-                Q(username__icontains=search) |
-                Q(email__icontains=search)
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(username__icontains=search)
+                | Q(email__icontains=search)
             )
 
         # Filtro por estado activo
-        is_active = request.query_params.get("is_active")
-        if is_active is not None:
-            qs = qs.filter(is_active=is_active.lower() == "true")
+        is_active = request.query_params.get(
+            "is_active"
+        )
 
-        # Paginación manual compatible con StandardResultsSetPagination
+        if is_active is not None:
+            qs = qs.filter(
+                is_active=is_active.lower() == "true"
+            )
+
+        # Paginación manual
         total = qs.count()
+
         try:
-            page      = max(1, int(request.query_params.get("page", 1)))
-            page_size = min(100, max(1, int(request.query_params.get("page_size", 20))))
+            page = max(
+                1,
+                int(
+                    request.query_params.get(
+                        "page",
+                        1,
+                    )
+                ),
+            )
+
+            page_size = min(
+                100,
+                max(
+                    1,
+                    int(
+                        request.query_params.get(
+                            "page_size",
+                            20,
+                        )
+                    ),
+                ),
+            )
+
         except (ValueError, TypeError):
-            page, page_size = 1, 20
+            page = 1
+            page_size = 20
 
         offset = (page - 1) * page_size
-        users  = qs[offset: offset + page_size]
+
+        users = qs[
+            offset: offset + page_size
+        ]
 
         return api_response(
             data={
-                "count":       total,
-                "page":        page,
-                "page_size":   page_size,
-                "total_pages": (total + page_size - 1) // page_size,
-                "results":     [self._user_detail(u) for u in users],
+                "count": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (
+                    total + page_size - 1
+                ) // page_size,
+                "results": [
+                    self._user_detail(u)
+                    for u in users
+                ],
             },
             message="Usuarios obtenidos correctamente.",
         )
 
     def retrieve(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_view_users",
+        )
+
         try:
             user = User.objects.prefetch_related(
-                "profile", "role_assignments__role",
-                "role_assignments__organization", "role_assignments__branch",
+                "profile",
+                "role_assignments__role",
+                "role_assignments__organization",
+                "role_assignments__branch",
             ).get(pk=pk)
+
         except User.DoesNotExist:
-            return api_error(message="Usuario no encontrado.", status_code=404)
-        return api_response(data=self._user_detail(user))
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
+        return api_response(
+            data=self._user_detail(user)
+        )
 
     def create(self, request):
-        serializer = UserCreateSerializer(data=request.data)
+        self._check_user_permission(
+            request,
+            "can_create_users",
+        )
+
+        serializer = UserCreateSerializer(
+            data=request.data
+        )
+
         if not serializer.is_valid():
-            return api_error(data=serializer.errors, message="Datos inválidos.")
+            return api_error(
+                data=serializer.errors,
+                message="Datos inválidos.",
+            )
+
         user = serializer.save()
-        logger.info(f"Usuario creado: {user.username} por admin={request.user.username}")
-        return api_response(data=self._user_detail(user),
-                            status_code=status.HTTP_201_CREATED,
-                            message="Usuario creado correctamente.")
+
+        logger.info(
+            f"Usuario creado: {user.username} "
+            f"por usuario={request.user.username}"
+        )
+
+        return api_response(
+            data=self._user_detail(user),
+            status_code=status.HTTP_201_CREATED,
+            message="Usuario creado correctamente.",
+        )
 
     def partial_update(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_edit_users",
+        )
+
         try:
             user = User.objects.get(pk=pk)
+
         except User.DoesNotExist:
-            return api_error(message="Usuario no encontrado.", status_code=404)
-        serializer = UserUpdateSerializer(user, data=request.data, partial=True)
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
+        serializer = UserUpdateSerializer(
+            user,
+            data=request.data,
+            partial=True,
+        )
+
         if not serializer.is_valid():
-            return api_error(data=serializer.errors, message="Datos inválidos.")
+            return api_error(
+                data=serializer.errors,
+                message="Datos inválidos.",
+            )
+
         serializer.save()
-        return api_response(data=self._user_detail(user), message="Usuario actualizado correctamente.")
+
+        return api_response(
+            data=self._user_detail(user),
+            message="Usuario actualizado correctamente.",
+        )
 
     def destroy(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_delete_users",
+        )
+
         try:
             user = User.objects.get(pk=pk)
+
         except User.DoesNotExist:
-            return api_error(message="Usuario no encontrado.", status_code=404)
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
         if user == request.user:
-            return api_error(message="No puedes desactivarte a ti mismo.", status_code=400)
-        user.is_active = False
-        user.save(update_fields=["is_active"])
-        logger.info(f"Usuario desactivado: {user.username} por admin={request.user.username}")
-        return api_response(message="Usuario desactivado correctamente.")
+            return api_error(
+                message="No puedes eliminarte a ti mismo.",
+                status_code=400,
+            )
 
-    @action(detail=True, methods=["post"], url_path="set_password")
+        username = user.username
+
+        user.delete()
+
+        logger.info(
+            f"Usuario eliminado: {username} "
+            f"por usuario={request.user.username}"
+        )
+
+        return api_response(
+            message="Usuario eliminado correctamente."
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="set_password",
+    )
     def set_password(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_edit_users",
+        )
+
         try:
             user = User.objects.get(pk=pk)
+
         except User.DoesNotExist:
-            return api_error(message="Usuario no encontrado.", status_code=404)
-        serializer = UserPasswordSerializer(data=request.data)
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
+        serializer = UserPasswordSerializer(
+            data=request.data
+        )
+
         if not serializer.is_valid():
-            return api_error(data=serializer.errors, message="Datos inválidos.")
-        user.set_password(serializer.validated_data["password"])
-        user.save(update_fields=["password"])
-        logger.info(f"Contraseña cambiada para: {user.username} por admin={request.user.username}")
-        return api_response(message="Contraseña actualizada correctamente.")
+            return api_error(
+                data=serializer.errors,
+                message="Datos inválidos.",
+            )
 
-    @action(detail=True, methods=["post"], url_path="activate")
+        user.set_password(
+            serializer.validated_data["password"]
+        )
+
+        user.save(
+            update_fields=["password"]
+        )
+
+        logger.info(
+            f"Contraseña cambiada para: "
+            f"{user.username} "
+            f"por usuario={request.user.username}"
+        )
+
+        return api_response(
+            message="Contraseña actualizada correctamente."
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="activate",
+    )
     def activate(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_edit_users",
+        )
+
         try:
             user = User.objects.get(pk=pk)
-        except User.DoesNotExist:
-            return api_error(message="Usuario no encontrado.", status_code=404)
-        user.is_active = True
-        user.save(update_fields=["is_active"])
-        return api_response(data=self._user_detail(user), message="Usuario activado correctamente.")
 
+        except User.DoesNotExist:
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
+        user.is_active = True
+
+        user.save(
+            update_fields=["is_active"]
+        )
+
+        return api_response(
+            data=self._user_detail(user),
+            message="Usuario activado correctamente.",
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="deactivate",
+    )
+    def deactivate(self, request, pk=None):
+        self._check_user_permission(
+            request,
+            "can_edit_users",
+        )
+
+        try:
+            user = User.objects.get(pk=pk)
+
+        except User.DoesNotExist:
+            return api_error(
+                message="Usuario no encontrado.",
+                status_code=404,
+            )
+
+        if user == request.user:
+            return api_error(
+                message="No puedes desactivar tu propia cuenta.",
+                status_code=400,
+            )
+
+        user.is_active = False
+
+        user.save(
+            update_fields=["is_active"]
+        )
+
+        return api_response(
+            data=self._user_detail(user),
+            message="Usuario desactivado correctamente.",
+        )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ViewSets de catálogos de cuentas
 # ──────────────────────────────────────────────────────────────────────────────
-
+    
 class RoleViewSet(BaseModelViewSet):
     queryset = Role.objects.all().order_by("name")
     serializer_class = RoleSerializer
-    permission_classes = [IsAdminRole]
     search_fields = ["name", "code", "description"]
     ordering_fields = ["name", "code", "is_active"]
+
+    def get_permissions(self):
+        return [IsAuthenticated()]
+
+    def _check_role_permission(self, request, permission):
+        if not user_has_permission_key(request.user, permission):
+
+            raise PermissionDenied(
+                "No tienes permiso para realizar esta acción."
+            )
+
+    def list(self, request, *args, **kwargs):
+        self._check_role_permission(request, "can_view_roles")
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        self._check_role_permission(request, "can_view_roles")
+        return super().retrieve(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         """
         Si existe un rol soft-deleted con el mismo código, lo restaura
         en vez de crear uno nuevo (evita IntegrityError por UNIQUE constraint).
         """
-        from apps.common.responses import api_response as _ok
-        from apps.audit.services import audit_action
 
-        code = request.data.get("code", "").strip().upper().replace(" ", "_")
+        self._check_role_permission(
+            request,
+            "can_create_roles",
+        )
+
+        code = (
+            request.data
+            .get("code", "")
+            .strip()
+            .upper()
+            .replace(" ", "_")
+        )
 
         deleted_role = Role.all_objects.filter(
             code=code,
@@ -246,33 +518,99 @@ class RoleViewSet(BaseModelViewSet):
 
         if deleted_role:
             # Restaurar el registro eliminado con los nuevos datos
-            deleted_role.deleted_at   = None
-            deleted_role.name         = request.data.get("name", deleted_role.name)
-            deleted_role.description  = request.data.get("description", deleted_role.description)
-            deleted_role.is_active    = request.data.get("is_active", True)
-            deleted_role.save(update_fields=["deleted_at", "name", "description", "is_active", "updated_at"])
+            deleted_role.deleted_at = None
+
+            deleted_role.name = request.data.get(
+                "name",
+                deleted_role.name,
+            )
+
+            deleted_role.description = request.data.get(
+                "description",
+                deleted_role.description,
+            )
+
+            deleted_role.is_active = request.data.get(
+                "is_active",
+                True,
+            )
+
+            deleted_role.save(
+                update_fields=[
+                    "deleted_at",
+                    "name",
+                    "description",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
 
             audit_action(
                 request=request,
                 action="RESTORE",
                 instance=deleted_role,
-                notes=f"Rol restaurado desde soft-delete por {request.user.username}.",
+                notes=(
+                    "Rol restaurado desde soft-delete "
+                    f"por {request.user.username}."
+                ),
             )
 
             return _ok(
                 data=RoleSerializer(deleted_role).data,
                 status_code=201,
-                message="Rol restaurado correctamente (existía como eliminado).",
+                message=(
+                    "Rol restaurado correctamente "
+                    "(existía como eliminado)."
+                ),
             )
 
         # Flujo normal de creación
-        return super().create(request, *args, **kwargs)
+        return super().create(
+            request,
+            *args,
+            **kwargs,
+        )
 
+    def update(self, request, *args, **kwargs):
+        self._check_role_permission(
+            request,
+            "can_edit_roles",
+        )
+
+        return super().update(
+            request,
+            *args,
+            **kwargs,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        self._check_role_permission(
+            request,
+            "can_edit_roles",
+        )
+
+        return super().partial_update(
+            request,
+            *args,
+            **kwargs,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        self._check_role_permission(
+            request,
+            "can_delete_roles",
+        )
+
+        return super().destroy(
+            request,
+            *args,
+            **kwargs,
+        )
 
 class UserProfileViewSet(BaseModelViewSet):
     queryset = UserProfile.objects.select_related("user", "organization").order_by("id")
     serializer_class = UserProfileSerializer
-    permission_classes = [IsAdminRole]
+    permission_classes = [CanManageUserProfilesAndRoles]
 
 
 class UserRoleAssignmentViewSet(BaseModelViewSet):
@@ -280,7 +618,7 @@ class UserRoleAssignmentViewSet(BaseModelViewSet):
         "user", "role", "organization", "legal_entity", "branch",
     ).order_by("id")
     serializer_class = UserRoleAssignmentSerializer
-    permission_classes = [IsAdminRole]
+    permission_classes = [CanManageUserProfilesAndRoles]
     filterset_fields = ["user", "role", "organization", "branch", "is_active"]
 
 
@@ -336,197 +674,547 @@ def update_my_profile(request):
 # ──────────────────────────────────────────────────────────────────────────────
 
 @api_view(["GET"])
-@permission_classes([IsAdminRole])
+@permission_classes([IsAuthenticated])
 def role_permissions_matrix(request):
     """
     Matriz granular: un permiso por acción (ver / crear / editar / eliminar).
     """
+
+    # Para visualizar la matriz basta con tener permiso para ver Roles
+    if not user_has_permission_key(request.user, "can_view_roles"):
+        raise PermissionDenied(
+            "No tienes permiso para ver la matriz de roles."
+        )
+
     db_roles = list(
         Role.objects.filter(is_active=True)
         .values("uuid", "code", "name")
         .order_by("name")
     )
+
     role_codes = [r["code"] for r in db_roles]
 
     saved_perms = {}
-    for rp in RolePermission.objects.filter(role__code__in=role_codes).select_related("role"):
-        saved_perms.setdefault(rp.role.code, set()).add(rp.permission_key)
+
+    for rp in RolePermission.objects.filter(
+        role__code__in=role_codes
+    ).select_related("role"):
+        saved_perms.setdefault(
+            rp.role.code,
+            set(),
+        ).add(rp.permission_key)
 
     # ── Defaults granulares del sistema ───────────────────────────────────────
-    ADMIN_GERENTE   = {"ADMIN", "GERENTE"}
-    ADMIN_GER_ABAST = {"ADMIN", "GERENTE", "ABASTECIMIENTO"}
-    CATALOG_READERS = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    SUP_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS"}
-    INV_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    INV_WRITERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    TRANSFER_ROLES  = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    PURCHASE_REQERS = {"ADMIN","GERENTE","ABASTECIMIENTO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
+
+    ADMIN_GERENTE = {
+        "ADMIN"
+    }
 
     SYSTEM_DEFAULTS = {
         # Dashboard
-        "can_view_dashboard":             set(role_codes),
+        "can_view_dashboard": ADMIN_GERENTE,
+
         # Organización
-        "can_view_organizations":         ADMIN_GERENTE,
-        "can_create_organizations":       ADMIN_GERENTE,
-        "can_edit_organizations":         ADMIN_GERENTE,
-        "can_delete_organizations":       {"ADMIN"},
+        "can_view_organizations": ADMIN_GERENTE,
+        "can_create_organizations": ADMIN_GERENTE,
+        "can_edit_organizations": ADMIN_GERENTE,
+        "can_delete_organizations": ADMIN_GERENTE,
+
         # Productos
-        "can_view_products":              CATALOG_READERS,
-        "can_create_products":            ADMIN_GER_ABAST,
-        "can_edit_products":              ADMIN_GER_ABAST,
-        "can_delete_products":            ADMIN_GER_ABAST,
+        "can_view_products": ADMIN_GERENTE,
+        "can_create_products": ADMIN_GERENTE,
+        "can_edit_products": ADMIN_GERENTE,
+        "can_delete_products": ADMIN_GERENTE,
+
         # Proveedores
-        "can_view_suppliers":             SUP_READERS,
-        "can_create_suppliers":           ADMIN_GER_ABAST,
-        "can_edit_suppliers":             ADMIN_GER_ABAST,
-        "can_delete_suppliers":           ADMIN_GER_ABAST,
-        # Inventario
-        "can_view_inventory":             INV_READERS,
-        "can_create_inventory":           INV_WRITERS,
-        "can_edit_inventory":             INV_WRITERS,
-        "can_delete_inventory":           ADMIN_GER_ABAST,
+        "can_view_suppliers": ADMIN_GERENTE,
+        "can_create_suppliers": ADMIN_GERENTE,
+        "can_edit_suppliers": ADMIN_GERENTE,
+        "can_delete_suppliers": ADMIN_GERENTE,
+
+        # Inventario - movimientos
+        "can_view_inventory": ADMIN_GERENTE,
+        "can_create_inventory": ADMIN_GERENTE,
+        "can_edit_inventory": ADMIN_GERENTE,
+        "can_delete_inventory": ADMIN_GERENTE,
+
+        # Inventario - bodegas
+        "can_view_warehouses": ADMIN_GERENTE,
+        "can_create_warehouses": ADMIN_GERENTE,
+        "can_edit_warehouses": ADMIN_GERENTE,
+        "can_delete_warehouses": ADMIN_GERENTE,
+
         # Compras — Solicitudes
-        "can_view_supply_requests":       CATALOG_READERS,
-        "can_create_supply_request":      PURCHASE_REQERS,
-        "can_edit_supply_request":        ADMIN_GER_ABAST,
-        "can_approve_supply_request":     ADMIN_GER_ABAST,
+        "can_view_supply_requests": ADMIN_GERENTE,
+        "can_create_supply_request": ADMIN_GERENTE,
+        "can_edit_supply_request": ADMIN_GERENTE,
+        "can_approve_supply_request": ADMIN_GERENTE,
+
         # Compras — Órdenes
-        "can_view_purchase_orders":       SUP_READERS,
-        "can_create_purchase_orders":     ADMIN_GER_ABAST,
-        "can_edit_purchase_orders":       ADMIN_GER_ABAST,
-        "can_delete_purchase_orders":     ADMIN_GERENTE,
-        "can_receive_purchase":           INV_WRITERS,
+        "can_view_purchase_orders": ADMIN_GERENTE,
+        "can_create_purchase_orders": ADMIN_GERENTE,
+        "can_edit_purchase_orders": ADMIN_GERENTE,
+        "can_delete_purchase_orders": ADMIN_GERENTE,
+        "can_receive_purchase": ADMIN_GERENTE,
+
+        # Carga de documentos
+        "can_access_document_preview": ADMIN_GERENTE,
+
         # Traspasos
-        "can_view_transfers":             TRANSFER_ROLES,
-        "can_create_transfers":           TRANSFER_ROLES,
-        "can_edit_transfers":             TRANSFER_ROLES,
-        "can_delete_transfers":           ADMIN_GER_ABAST,
+        "can_view_transfers": ADMIN_GERENTE,
+        "can_create_transfers": ADMIN_GERENTE,
+        "can_edit_transfers": ADMIN_GERENTE,
+        "can_delete_transfers": ADMIN_GERENTE,
+
         # Finanzas
-        "can_view_finance":               {"ADMIN","GERENTE","FINANZAS"},
-        "can_create_finance":             {"ADMIN","GERENTE","FINANZAS"},
-        "can_edit_finance":               {"ADMIN","GERENTE","FINANZAS"},
-        "can_delete_finance":             ADMIN_GERENTE,
+        "can_view_finance": ADMIN_GERENTE,
+        "can_create_finance": ADMIN_GERENTE,
+        "can_edit_finance": ADMIN_GERENTE,
+        "can_delete_finance": ADMIN_GERENTE,
+
         # Evaluaciones
-        "can_view_evaluations":           set(role_codes),
-        "can_create_evaluations":         ADMIN_GERENTE,
-        "can_edit_evaluations":           ADMIN_GERENTE,
-        "can_delete_evaluations":         {"ADMIN"},
+        "can_view_evaluations": ADMIN_GERENTE,
+        "can_create_evaluations": ADMIN_GERENTE,
+        "can_edit_evaluations": ADMIN_GERENTE,
+        "can_delete_evaluations": ADMIN_GERENTE,
+
         # Reportes
-        "can_view_reports":               {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL"},
+        "can_view_reports": ADMIN_GERENTE,
+
         # Usuarios
-        "can_view_users":                 {"ADMIN"},
-        "can_create_users":               {"ADMIN"},
-        "can_edit_users":                 {"ADMIN"},
-        "can_delete_users":               {"ADMIN"},
+        "can_view_users": ADMIN_GERENTE,
+        "can_create_users": ADMIN_GERENTE,
+        "can_edit_users": ADMIN_GERENTE,
+        "can_delete_users": ADMIN_GERENTE,
+
         # Roles
-        "can_view_roles":                 {"ADMIN"},
-        "can_create_roles":               {"ADMIN"},
-        "can_edit_roles":                 {"ADMIN"},
-        "can_delete_roles":               {"ADMIN"},
+        "can_view_roles": ADMIN_GERENTE,
+        "can_create_roles": ADMIN_GERENTE,
+        "can_edit_roles": ADMIN_GERENTE,
+        "can_delete_roles": ADMIN_GERENTE,
+
         # Auditoría
-        "can_view_audit":                 ADMIN_GERENTE,
+        "can_view_audit": ADMIN_GERENTE,
     }
 
     def has_perm(role_code, perm_key):
+        # Si el rol tiene permisos configurados en BD,
+        # esos permisos tienen prioridad sobre los defaults.
         if role_code in saved_perms:
             return perm_key in saved_perms[role_code]
-        return role_code in SYSTEM_DEFAULTS.get(perm_key, set())
+
+        return role_code in SYSTEM_DEFAULTS.get(
+            perm_key,
+            set(),
+        )
 
     MODULE_STRUCTURE = [
-        {"module": "Dashboard", "key": "dashboard", "permissions": [
-            {"action": "Ver dashboard",          "key": "can_view_dashboard"},
-        ]},
-        {"module": "Organización", "key": "organizations", "permissions": [
-            {"action": "Ver",     "key": "can_view_organizations"},
-            {"action": "Crear",   "key": "can_create_organizations"},
-            {"action": "Editar",  "key": "can_edit_organizations"},
-            {"action": "Eliminar","key": "can_delete_organizations"},
-        ]},
-        {"module": "Productos", "key": "products", "permissions": [
-            {"action": "Ver",     "key": "can_view_products"},
-            {"action": "Crear",   "key": "can_create_products"},
-            {"action": "Editar",  "key": "can_edit_products"},
-            {"action": "Eliminar","key": "can_delete_products"},
-        ]},
-        {"module": "Proveedores", "key": "suppliers", "permissions": [
-            {"action": "Ver",     "key": "can_view_suppliers"},
-            {"action": "Crear",   "key": "can_create_suppliers"},
-            {"action": "Editar",  "key": "can_edit_suppliers"},
-            {"action": "Eliminar","key": "can_delete_suppliers"},
-        ]},
-        {"module": "Inventario", "key": "inventory", "permissions": [
-            {"action": "Ver",                  "key": "can_view_inventory"},
-            {"action": "Registrar movimientos","key": "can_create_inventory"},
-            {"action": "Editar movimientos",   "key": "can_edit_inventory"},
-            {"action": "Eliminar movimientos", "key": "can_delete_inventory"},
-        ]},
-        {"module": "Compras — Solicitudes", "key": "supply_requests", "permissions": [
-            {"action": "Ver solicitudes",    "key": "can_view_supply_requests"},
-            {"action": "Crear solicitud",    "key": "can_create_supply_request"},
-            {"action": "Editar solicitud",   "key": "can_edit_supply_request"},
-            {"action": "Aprobar solicitud",  "key": "can_approve_supply_request"},
-        ]},
-        {"module": "Compras — Órdenes", "key": "purchase_orders", "permissions": [
-            {"action": "Ver órdenes",         "key": "can_view_purchase_orders"},
-            {"action": "Crear orden",         "key": "can_create_purchase_orders"},
-            {"action": "Editar orden",        "key": "can_edit_purchase_orders"},
-            {"action": "Eliminar orden",      "key": "can_delete_purchase_orders"},
-            {"action": "Recibir compra",      "key": "can_receive_purchase"},
-        ]},
-        {"module": "Traspasos", "key": "transfers", "permissions": [
-            {"action": "Ver",     "key": "can_view_transfers"},
-            {"action": "Crear",   "key": "can_create_transfers"},
-            {"action": "Editar",  "key": "can_edit_transfers"},
-            {"action": "Eliminar","key": "can_delete_transfers"},
-        ]},
-        {"module": "Finanzas", "key": "finance", "permissions": [
-            {"action": "Ver",     "key": "can_view_finance"},
-            {"action": "Crear",   "key": "can_create_finance"},
-            {"action": "Editar",  "key": "can_edit_finance"},
-            {"action": "Eliminar","key": "can_delete_finance"},
-        ]},
-        {"module": "Evaluaciones", "key": "evaluations", "permissions": [
-            {"action": "Ver",     "key": "can_view_evaluations"},
-            {"action": "Crear",   "key": "can_create_evaluations"},
-            {"action": "Editar",  "key": "can_edit_evaluations"},
-            {"action": "Eliminar","key": "can_delete_evaluations"},
-        ]},
-        {"module": "Reportes", "key": "reports", "permissions": [
-            {"action": "Ver reportes", "key": "can_view_reports"},
-        ]},
-        {"module": "Usuarios", "key": "users", "permissions": [
-            {"action": "Ver",     "key": "can_view_users"},
-            {"action": "Crear",   "key": "can_create_users"},
-            {"action": "Editar",  "key": "can_edit_users"},
-            {"action": "Eliminar","key": "can_delete_users"},
-        ]},
-        {"module": "Roles", "key": "roles", "permissions": [
-            {"action": "Ver",     "key": "can_view_roles"},
-            {"action": "Crear",   "key": "can_create_roles"},
-            {"action": "Editar",  "key": "can_edit_roles"},
-            {"action": "Eliminar","key": "can_delete_roles"},
-        ]},
-        {"module": "Auditoría", "key": "audit", "permissions": [
-            {"action": "Ver logs", "key": "can_view_audit"},
-        ]},
+        {
+            "module": "Dashboard",
+            "key": "dashboard",
+            "permissions": [
+                {
+                    "action": "Ver dashboard",
+                    "key": "can_view_dashboard",
+                },
+            ],
+        },
+
+        {
+            "module": "Organización",
+            "key": "organizations",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_organizations",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_organizations",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_organizations",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_organizations",
+                },
+            ],
+        },
+
+        {
+            "module": "Productos",
+            "key": "products",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_products",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_products",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_products",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_products",
+                },
+            ],
+        },
+
+        {
+            "module": "Proveedores",
+            "key": "suppliers",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_suppliers",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_suppliers",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_suppliers",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_suppliers",
+                },
+            ],
+        },
+
+        {
+            "module": "Inventario — Movimientos",
+            "key": "inventory",
+            "permissions": [
+                {
+                    "action": "Ver movimientos",
+                    "key": "can_view_inventory",
+                },
+                {
+                    "action": "Registrar movimientos",
+                    "key": "can_create_inventory",
+                },
+                {
+                    "action": "Editar movimientos",
+                    "key": "can_edit_inventory",
+                },
+                {
+                    "action": "Eliminar movimientos",
+                    "key": "can_delete_inventory",
+                },
+            ],
+        },
+
+        {
+            "module": "Carga de documentos",
+            "key": "document_preview",
+            "permissions": [
+                {
+                    "action": "Acceder y utilizar",
+                    "key": "can_access_document_preview",
+                },
+            ],
+        },
+
+        {
+            "module": "Inventario — Bodegas",
+            "key": "warehouses",
+            "permissions": [
+                {
+                    "action": "Ver bodegas",
+                    "key": "can_view_warehouses",
+                },
+                {
+                    "action": "Crear bodega",
+                    "key": "can_create_warehouses",
+                },
+                {
+                    "action": "Editar bodega",
+                    "key": "can_edit_warehouses",
+                },
+                {
+                    "action": "Eliminar bodega",
+                    "key": "can_delete_warehouses",
+                },
+            ],
+        },
+
+        {
+            "module": "Compras — Solicitudes",
+            "key": "supply_requests",
+            "permissions": [
+                {
+                    "action": "Ver solicitudes",
+                    "key": "can_view_supply_requests",
+                },
+                {
+                    "action": "Crear solicitud",
+                    "key": "can_create_supply_request",
+                },
+                {
+                    "action": "Editar solicitud",
+                    "key": "can_edit_supply_request",
+                },
+                {
+                    "action": "Aprobar solicitud",
+                    "key": "can_approve_supply_request",
+                },
+            ],
+        },
+
+        {
+            "module": "Compras — Órdenes",
+            "key": "purchase_orders",
+            "permissions": [
+                {
+                    "action": "Ver órdenes",
+                    "key": "can_view_purchase_orders",
+                },
+                {
+                    "action": "Crear orden",
+                    "key": "can_create_purchase_orders",
+                },
+                {
+                    "action": "Editar orden",
+                    "key": "can_edit_purchase_orders",
+                },
+                {
+                    "action": "Eliminar orden",
+                    "key": "can_delete_purchase_orders",
+                },
+                {
+                    "action": "Recibir compra",
+                    "key": "can_receive_purchase",
+                },
+            ],
+        },
+        {
+            "module": "Compras — Recepciones",
+            "key": "purchase_receipts",
+            "permissions": [
+                {
+                    "action": "Ver recepciones",
+                    "key": "can_view_purchase_receipts",
+                },
+                {
+                    "action": "Crear recepción",
+                    "key": "can_create_purchase_receipts",
+                },
+                {
+                    "action": "Editar recepción",
+                    "key": "can_edit_purchase_receipts",
+                },
+                {
+                    "action": "Eliminar recepción",
+                    "key": "can_delete_purchase_receipts",
+                },
+                {
+                    "action": "Procesar recepción",
+                    "key": "can_process_purchase_receipts",
+                },
+            ],
+        },
+
+        {
+            "module": "Compras — Reclamos",
+            "key": "supplier_claims",
+            "permissions": [
+                {
+                    "action": "Ver reclamos",
+                    "key": "can_view_supplier_claims",
+                },
+                {
+                    "action": "Crear reclamo",
+                    "key": "can_create_supplier_claims",
+                },
+                {
+                    "action": "Editar reclamo",
+                    "key": "can_edit_supplier_claims",
+                },
+                {
+                    "action": "Eliminar reclamo",
+                    "key": "can_delete_supplier_claims",
+                },
+            ],
+        },
+
+        {
+            "module": "Traspasos",
+            "key": "transfers",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_transfers",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_transfers",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_transfers",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_transfers",
+                },
+            ],
+        },
+
+        {
+            "module": "Finanzas",
+            "key": "finance",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_finance",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_finance",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_finance",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_finance",
+                },
+            ],
+        },
+
+        {
+            "module": "Evaluaciones",
+            "key": "evaluations",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_evaluations",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_evaluations",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_evaluations",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_evaluations",
+                },
+            ],
+        },
+
+        {
+            "module": "Reportes",
+            "key": "reports",
+            "permissions": [
+                {
+                    "action": "Ver reportes",
+                    "key": "can_view_reports",
+                },
+            ],
+        },
+
+        {
+            "module": "Usuarios",
+            "key": "users",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_users",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_users",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_users",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_users",
+                },
+            ],
+        },
+
+        {
+            "module": "Roles",
+            "key": "roles",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_roles",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_roles",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_roles",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_roles",
+                },
+            ],
+        },
+
+        {
+            "module": "Auditoría",
+            "key": "audit",
+            "permissions": [
+                {
+                    "action": "Ver logs",
+                    "key": "can_view_audit",
+                },
+            ],
+        },
     ]
 
     matrix = []
+
     for mod in MODULE_STRUCTURE:
         perms = []
+
         for p in mod["permissions"]:
-            roles_with = [c for c in role_codes if has_perm(c, p["key"])]
-            perms.append({**p, "roles": roles_with})
-        matrix.append({**mod, "permissions": perms})
+            roles_with = [
+                role_code
+                for role_code in role_codes
+                if has_perm(role_code, p["key"])
+            ]
+
+            perms.append({
+                **p,
+                "roles": roles_with,
+            })
+
+        matrix.append({
+            **mod,
+            "permissions": perms,
+        })
 
     return api_response(
-        data={"roles": db_roles, "matrix": matrix},
+        data={
+            "roles": db_roles,
+            "matrix": matrix,
+        },
         message="Matriz de permisos obtenida correctamente.",
     )
 
-
 @api_view(["POST"])
-@permission_classes([IsAdminRole])
+@permission_classes([CanEditRoles])
 def update_role_permission(request):
     """
     Activa o desactiva un permiso para un rol.
@@ -592,14 +1280,6 @@ def me(request):
 
     # Defaults granulares para roles sin configuración en BD
     ADMIN_GERENTE   = {"ADMIN", "GERENTE"}
-    ADMIN_GER_ABAST = {"ADMIN", "GERENTE", "ABASTECIMIENTO"}
-    CATALOG_READERS = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    SUP_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS"}
-    INV_READERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    INV_WRITERS     = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    TRANSFER_ROLES  = {"ADMIN","GERENTE","ABASTECIMIENTO","BODEGUERO","JEFA_SUCURSAL","TENS","TECNOLOGA_MEDICA"}
-    PURCHASE_REQERS = {"ADMIN","GERENTE","ABASTECIMIENTO","JEFA_SUCURSAL","SECRETARIA","TENS","TECNOLOGA_MEDICA","DOCTOR"}
-    FINANCE_ROLES   = {"ADMIN","GERENTE","FINANZAS"}
 
     DEFAULTS = {
         "can_view_dashboard":         set(role_codes),
@@ -607,60 +1287,73 @@ def me(request):
         "can_view_organizations":     ADMIN_GERENTE,
         "can_create_organizations":   ADMIN_GERENTE,
         "can_edit_organizations":     ADMIN_GERENTE,
-        "can_delete_organizations":   {"ADMIN"},
+        "can_delete_organizations":   ADMIN_GERENTE,
         # Productos
-        "can_view_products":          CATALOG_READERS,
-        "can_create_products":        ADMIN_GER_ABAST,
-        "can_edit_products":          ADMIN_GER_ABAST,
-        "can_delete_products":        ADMIN_GER_ABAST,
+        "can_view_products":          ADMIN_GERENTE,
+        "can_create_products":        ADMIN_GERENTE,
+        "can_edit_products":          ADMIN_GERENTE,
+        "can_delete_products":        ADMIN_GERENTE,
         # Proveedores
-        "can_view_suppliers":         SUP_READERS,
-        "can_create_suppliers":       ADMIN_GER_ABAST,
-        "can_edit_suppliers":         ADMIN_GER_ABAST,
-        "can_delete_suppliers":       ADMIN_GER_ABAST,
+        "can_view_suppliers":         ADMIN_GERENTE,
+        "can_create_suppliers":       ADMIN_GERENTE,
+        "can_edit_suppliers":         ADMIN_GERENTE,
+        "can_delete_suppliers":       ADMIN_GERENTE,
         # Inventario
-        "can_view_inventory":         INV_READERS,
-        "can_create_inventory":       INV_WRITERS,
-        "can_edit_inventory":         INV_WRITERS,
-        "can_delete_inventory":       ADMIN_GER_ABAST,
+        "can_view_inventory":         ADMIN_GERENTE,
+        "can_create_inventory":       ADMIN_GERENTE,
+        "can_edit_inventory":         ADMIN_GERENTE,
+        "can_delete_inventory":       ADMIN_GERENTE,
         # Compras — solicitudes
-        "can_view_supply_requests":   CATALOG_READERS,
-        "can_create_supply_request":  PURCHASE_REQERS,
-        "can_edit_supply_request":    ADMIN_GER_ABAST,
-        "can_approve_supply_request": ADMIN_GER_ABAST,
+        "can_view_supply_requests":   ADMIN_GERENTE,
+        "can_create_supply_request":  ADMIN_GERENTE,
+        "can_edit_supply_request":    ADMIN_GERENTE,
+        "can_approve_supply_request": ADMIN_GERENTE,
         # Compras — órdenes
-        "can_view_purchase_orders":   SUP_READERS,
-        "can_create_purchase_orders": ADMIN_GER_ABAST,
-        "can_edit_purchase_orders":   ADMIN_GER_ABAST,
+        "can_view_purchase_orders":   ADMIN_GERENTE,
+        "can_create_purchase_orders": ADMIN_GERENTE,
+        "can_edit_purchase_orders":   ADMIN_GERENTE,
         "can_delete_purchase_orders": ADMIN_GERENTE,
-        "can_receive_purchase":       INV_WRITERS,
+        "can_receive_purchase":       ADMIN_GERENTE,
+        # Compras — recepciones
+        "can_view_purchase_receipts": ADMIN_GERENTE,
+        "can_create_purchase_receipts": ADMIN_GERENTE,
+        "can_edit_purchase_receipts": ADMIN_GERENTE,
+        "can_delete_purchase_receipts": ADMIN_GERENTE,
+        "can_process_purchase_receipts": ADMIN_GERENTE,
+        # Compras — reclamos
+        "can_view_supplier_claims": ADMIN_GERENTE,
+        "can_create_supplier_claims": ADMIN_GERENTE,
+        "can_edit_supplier_claims": ADMIN_GERENTE,
+        "can_delete_supplier_claims": ADMIN_GERENTE,
+        # Carga de documentos
+        "can_access_document_preview": ADMIN_GERENTE,
         # Traspasos
-        "can_view_transfers":         TRANSFER_ROLES,
-        "can_create_transfers":       TRANSFER_ROLES,
-        "can_edit_transfers":         TRANSFER_ROLES,
-        "can_delete_transfers":       ADMIN_GER_ABAST,
+        "can_view_transfers":         ADMIN_GERENTE,
+        "can_create_transfers":       ADMIN_GERENTE,
+        "can_edit_transfers":         ADMIN_GERENTE,
+        "can_delete_transfers":       ADMIN_GERENTE,
         # Finanzas
-        "can_view_finance":           FINANCE_ROLES,
-        "can_create_finance":         FINANCE_ROLES,
-        "can_edit_finance":           FINANCE_ROLES,
+        "can_view_finance":           ADMIN_GERENTE,
+        "can_create_finance":         ADMIN_GERENTE,
+        "can_edit_finance":           ADMIN_GERENTE,
         "can_delete_finance":         ADMIN_GERENTE,
         # Evaluaciones
-        "can_view_evaluations":       set(role_codes),
+        "can_view_evaluations":       ADMIN_GERENTE,
         "can_create_evaluations":     ADMIN_GERENTE,
         "can_edit_evaluations":       ADMIN_GERENTE,
-        "can_delete_evaluations":     {"ADMIN"},
+        "can_delete_evaluations":     ADMIN_GERENTE,
         # Reportes
-        "can_view_reports":           {"ADMIN","GERENTE","ABASTECIMIENTO","FINANZAS","BODEGUERO","JEFA_SUCURSAL"},
+        "can_view_reports":           ADMIN_GERENTE,
         # Usuarios
-        "can_view_users":             {"ADMIN"},
-        "can_create_users":           {"ADMIN"},
-        "can_edit_users":             {"ADMIN"},
-        "can_delete_users":           {"ADMIN"},
+        "can_view_users":             ADMIN_GERENTE,
+        "can_create_users":           ADMIN_GERENTE,
+        "can_edit_users":             ADMIN_GERENTE,
+        "can_delete_users":           ADMIN_GERENTE,
         # Roles
-        "can_view_roles":             {"ADMIN"},
-        "can_create_roles":           {"ADMIN"},
-        "can_edit_roles":             {"ADMIN"},
-        "can_delete_roles":           {"ADMIN"},
+        "can_view_roles":             ADMIN_GERENTE,
+        "can_create_roles":           ADMIN_GERENTE,
+        "can_edit_roles":             ADMIN_GERENTE,
+        "can_delete_roles":           ADMIN_GERENTE,
         # Auditoría
         "can_view_audit":             ADMIN_GERENTE,
     }
@@ -694,16 +1387,32 @@ def me(request):
         "can_create_inventory":       user_has_perm("can_create_inventory"),
         "can_edit_inventory":         user_has_perm("can_edit_inventory"),
         "can_delete_inventory":       user_has_perm("can_delete_inventory"),
-        # Compras
-        "can_view_supply_requests":   user_has_perm("can_view_supply_requests"),
-        "can_create_supply_request":  user_has_perm("can_create_supply_request"),
-        "can_edit_supply_request":    user_has_perm("can_edit_supply_request"),
+        "can_view_warehouses":        user_has_perm("can_view_warehouses"),
+        "can_create_warehouses":      user_has_perm("can_create_warehouses"),
+        "can_edit_warehouses":        user_has_perm("can_edit_warehouses"),
+        "can_delete_warehouses":      user_has_perm("can_delete_warehouses"),
+        # Compras — Solicitudes
+        "can_view_supply_requests": user_has_perm("can_view_supply_requests"),
+        "can_create_supply_request": user_has_perm("can_create_supply_request"),
+        "can_edit_supply_request": user_has_perm("can_edit_supply_request"),
         "can_approve_supply_request": user_has_perm("can_approve_supply_request"),
-        "can_view_purchase_orders":   user_has_perm("can_view_purchase_orders"),
+        # Compras — Órdenes
+        "can_view_purchase_orders": user_has_perm("can_view_purchase_orders"),
         "can_create_purchase_orders": user_has_perm("can_create_purchase_orders"),
-        "can_edit_purchase_orders":   user_has_perm("can_edit_purchase_orders"),
+        "can_edit_purchase_orders": user_has_perm("can_edit_purchase_orders"),
         "can_delete_purchase_orders": user_has_perm("can_delete_purchase_orders"),
-        "can_receive_purchase":       user_has_perm("can_receive_purchase"),
+        "can_receive_purchase": user_has_perm("can_receive_purchase"),
+        # Compras — Recepciones
+        "can_view_purchase_receipts": user_has_perm("can_view_purchase_receipts"),
+        "can_create_purchase_receipts": user_has_perm("can_create_purchase_receipts"),
+        "can_edit_purchase_receipts": user_has_perm("can_edit_purchase_receipts"),
+        "can_delete_purchase_receipts": user_has_perm( "can_delete_purchase_receipts"),
+        "can_process_purchase_receipts": user_has_perm("can_process_purchase_receipts"),
+        # Compras — Reclamos
+        "can_view_supplier_claims": user_has_perm("can_view_supplier_claims"),
+        "can_create_supplier_claims": user_has_perm("can_create_supplier_claims"),
+        "can_edit_supplier_claims": user_has_perm("can_edit_supplier_claims"),
+        "can_delete_supplier_claims": user_has_perm("can_delete_supplier_claims"),
         # Traspasos
         "can_view_transfers":         user_has_perm("can_view_transfers"),
         "can_create_transfers":       user_has_perm("can_create_transfers"),
@@ -714,6 +1423,8 @@ def me(request):
         "can_create_finance":         user_has_perm("can_create_finance"),
         "can_edit_finance":           user_has_perm("can_edit_finance"),
         "can_delete_finance":         user_has_perm("can_delete_finance"),
+        # Carga de documentos
+        "can_access_document_preview": user_has_perm("can_access_document_preview"),
         # Evaluaciones
         "can_view_evaluations":       user_has_perm("can_view_evaluations"),
         "can_create_evaluations":     user_has_perm("can_create_evaluations"),
@@ -726,42 +1437,89 @@ def me(request):
         "can_create_organizations":   user_has_perm("can_create_organizations"),
         "can_edit_organizations":     user_has_perm("can_edit_organizations"),
         "can_delete_organizations":   user_has_perm("can_delete_organizations"),
-        # Usuarios / Roles
-        "can_view_users":             is_admin,
-        "can_create_users":           is_admin,
-        "can_edit_users":             is_admin,
-        "can_delete_users":           is_admin,
-        "can_view_roles":             is_admin,
-        "can_create_roles":           is_admin,
-        "can_edit_roles":             is_admin,
-        "can_delete_roles":           is_admin,
+        # Usuarios
+        "can_view_users":             user_has_perm("can_view_users"),
+        "can_create_users":           user_has_perm("can_create_users"),
+        "can_edit_users":             user_has_perm("can_edit_users"),
+        "can_delete_users":           user_has_perm("can_delete_users"),
+        # Roles
+        "can_view_roles":             user_has_perm("can_view_roles"),
+        "can_create_roles":           user_has_perm("can_create_roles"),
+        "can_edit_roles":             user_has_perm("can_edit_roles"),
+        "can_delete_roles":           user_has_perm("can_delete_roles"),
         # Auditoría
         "can_view_audit":             user_has_perm("can_view_audit"),
         # Legacy — mantenidos para compatibilidad con el router existente
-        "can_manage_catalogs":        user_has_perm("can_edit_products"),
-        "can_view_catalogs":          user_has_perm("can_view_products"),
-        "can_manage_suppliers":       user_has_perm("can_edit_suppliers"),
-        "can_manage_inventory":       user_has_perm("can_edit_inventory"),
-        "can_manage_purchase_orders": user_has_perm("can_edit_purchase_orders"),
-        "can_manage_transfers":       user_has_perm("can_edit_transfers"),
-        "can_manage_finance":         user_has_perm("can_edit_finance"),
+        # "can_manage_catalogs":        user_has_perm("can_edit_products"),
+        # "can_view_catalogs":          user_has_perm("can_view_products"),
+        # "can_manage_suppliers":       user_has_perm("can_edit_suppliers"),
+        # "can_manage_inventory":       user_has_perm("can_edit_inventory"),
+        # "can_manage_purchase_orders": user_has_perm("can_edit_purchase_orders"),
+        # "can_manage_transfers":       user_has_perm("can_edit_transfers"),
+        # "can_manage_finance":         user_has_perm("can_edit_finance"),
         "can_manage_users":           is_admin,
-        "can_manage_organizations":   user_has_perm("can_edit_organizations"),
+        # "can_manage_organizations":   user_has_perm("can_edit_organizations"),
     }
 
     menu = [
-        {"key": "dashboard",     "label": "Dashboard",     "path": "/dashboard",     "visible": True},
+        {
+            "key": "dashboard",
+            "label": "Dashboard",
+            "path": "/dashboard",
+            "visible": user_has_perm("can_view_dashboard"),
+        },
         {"key": "organizations", "label": "Organización",  "path": "/organizations", "visible": user_has_perm("can_view_organizations")},
         {"key": "products",      "label": "Productos",     "path": "/products",      "visible": user_has_perm("can_view_products")},
         {"key": "suppliers",     "label": "Proveedores",   "path": "/suppliers",     "visible": user_has_perm("can_view_suppliers")},
-        {"key": "inventory",     "label": "Inventario",    "path": "/inventory",     "visible": user_has_perm("can_view_inventory")},
-        {"key": "purchasing",    "label": "Compras",       "path": "/purchasing",    "visible": user_has_perm("can_view_supply_requests") or user_has_perm("can_view_purchase_orders")},
+        {
+            "key": "inventory",
+            "label": "Inventario",
+            "path": "/inventory",
+            "visible": (
+                user_has_perm("can_view_inventory")
+                or user_has_perm("can_view_warehouses")
+            ),
+        },
+        {
+            "key": "purchasing",
+            "label": "Compras",
+            "path": "/purchasing",
+            "visible": (
+                user_has_perm("can_view_supply_requests")
+                or user_has_perm("can_view_purchase_orders")
+                or user_has_perm("can_view_purchase_receipts")
+                or user_has_perm("can_view_supplier_claims")
+            ),
+        },
         {"key": "transfers",     "label": "Traspasos",     "path": "/transfers",     "visible": user_has_perm("can_view_transfers")},
         {"key": "finance",       "label": "Finanzas",      "path": "/finance",       "visible": user_has_perm("can_view_finance")},
-        {"key": "evaluations",   "label": "Evaluaciones",  "path": "/evaluations",   "visible": True},
+        {
+            "key": "document-preview",
+            "label": "Carga de documentos",
+            "path": "/document-preview",
+            "visible": user_has_perm(
+                "can_access_document_preview"
+            ),
+        },
+        {
+            "key": "evaluations",
+            "label": "Evaluaciones",
+            "path": "/evaluations",
+            "visible": user_has_perm("can_view_evaluations"),
+        },
         {"key": "reports",       "label": "Reportes",      "path": "/reports",       "visible": user_has_perm("can_view_reports")},
-        {"key": "users",         "label": "Usuarios",      "path": "/users",         "visible": is_admin},
-        {"key": "roles",         "label": "Roles",         "path": "/roles",         "visible": is_admin},
+        {
+            "key": "users",
+            "label": "Usuarios",
+            "path": "/users",
+            "visible": user_has_perm("can_view_users"),
+        },
+        {
+            "key": "roles",
+            "label": "Roles",
+            "path": "/roles",
+            "visible": user_has_perm("can_view_roles"),
+        },
         {"key": "audit",         "label": "Auditoría",     "path": "/audit",         "visible": user_has_perm("can_view_audit")},
     ]
 

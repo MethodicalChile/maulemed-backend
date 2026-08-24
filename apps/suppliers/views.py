@@ -54,6 +54,8 @@ class SupplierProductViewSet(BaseModelViewSet):
         .select_related(
             "supplier",
             "product",
+            "product__category",
+            "product__unit",
         )
         .all()
     )
@@ -112,7 +114,7 @@ class SupplierProductViewSet(BaseModelViewSet):
                 "product",
             )
             .prefetch_related(
-                "prices",
+                "price_history",
             )
             .order_by(
                 "supplier__name",
@@ -123,7 +125,7 @@ class SupplierProductViewSet(BaseModelViewSet):
 
         for supplier_product in supplier_products:
             history = (
-                supplier_product.prices
+                supplier_product.price_history
                 .all()
                 .order_by(
                     "effective_date",

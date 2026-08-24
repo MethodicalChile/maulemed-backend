@@ -4,12 +4,16 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
 from apps.common.viewsets import BaseModelViewSet
+
 from apps.common.permissions import (
-    CanManagePurchasing,
+    CanAccessSupplyRequests,
+    CanAccessPurchaseOrders,
+    CanAccessPurchaseReceipts,
+    CanAccessSupplierClaims,
     CanCreateSupplyRequest,
     CanApproveSupplyRequest,
     CanApprovePurchaseOrder,
-    CanReceivePurchase,
+    CanProcessPurchaseReceipt,
 )
 from apps.common.scopes import apply_branch_scope
 from apps.common.responses import api_response
@@ -50,7 +54,6 @@ def ensure_action_permission(permission_class, request, view):
         from rest_framework.exceptions import PermissionDenied
         raise PermissionDenied("No tienes permiso para realizar esta acción.")
 
-
 class SupplyRequestViewSet(BaseModelViewSet):
     queryset = SupplyRequest.objects.select_related(
         "branch",
@@ -60,8 +63,9 @@ class SupplyRequestViewSet(BaseModelViewSet):
         "reviewed_by",
         "approved_by",
     ).prefetch_related("items").all()
+
     serializer_class = SupplyRequestSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessSupplyRequests]
 
     filterset_fields = [
         "branch",
@@ -74,12 +78,14 @@ class SupplyRequestViewSet(BaseModelViewSet):
         "reviewed_by",
         "approved_by",
     ]
+
     search_fields = [
         "branch__name",
         "legal_entity__name",
         "cost_center__name",
         "comments",
     ]
+
     ordering_fields = [
         "period_year",
         "period_month",
@@ -88,15 +94,29 @@ class SupplyRequestViewSet(BaseModelViewSet):
         "submitted_at",
         "approved_at",
     ]
+
     ordering = ["-created_at"]
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return apply_branch_scope(qs, self.request.user, branch_field="branch")
 
-    @action(detail=True, methods=["post"])
+        return apply_branch_scope(
+            qs,
+            self.request.user,
+            branch_field="branch",
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+    )
     def submit(self, request, uuid=None):
-        ensure_action_permission(CanCreateSupplyRequest, request, self)
+        ensure_action_permission(
+            CanCreateSupplyRequest,
+            request,
+            self,
+        )
+
         instance = self.get_object()
 
         if not instance.items.exists():
@@ -111,7 +131,14 @@ class SupplyRequestViewSet(BaseModelViewSet):
 
         instance.status = SupplyRequest.STATUS_SUBMITTED
         instance.submitted_at = timezone.now()
-        instance.save(update_fields=["status", "submitted_at", "updated_at"])
+
+        instance.save(
+            update_fields=[
+                "status",
+                "submitted_at",
+                "updated_at",
+            ]
+        )
 
         audit_action(
             request=request,
@@ -128,9 +155,17 @@ class SupplyRequestViewSet(BaseModelViewSet):
             message="Solicitud enviada correctamente.",
         )
 
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True,
+        methods=["post"],
+    )
     def approve(self, request, uuid=None):
-        ensure_action_permission(CanApproveSupplyRequest, request, self)
+        ensure_action_permission(
+            CanApproveSupplyRequest,
+            request,
+            self,
+        )
+
         instance = self.get_object()
 
         if not instance.items.exists():
@@ -146,7 +181,15 @@ class SupplyRequestViewSet(BaseModelViewSet):
         instance.status = SupplyRequest.STATUS_APPROVED
         instance.approved_by = request.user
         instance.approved_at = timezone.now()
-        instance.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        instance.save(
+            update_fields=[
+                "status",
+                "approved_by",
+                "approved_at",
+                "updated_at",
+            ]
+        )
 
         audit_action(
             request=request,
@@ -163,17 +206,37 @@ class SupplyRequestViewSet(BaseModelViewSet):
             message="Solicitud aprobada correctamente.",
         )
 
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True,
+        methods=["post"],
+    )
     def reject(self, request, uuid=None):
-        ensure_action_permission(CanApproveSupplyRequest, request, self)
+        ensure_action_permission(
+            CanApproveSupplyRequest,
+            request,
+            self,
+        )
+
         instance = self.get_object()
         old_data = serialize_instance(instance)
 
         instance.status = SupplyRequest.STATUS_REJECTED
         instance.reviewed_by = request.user
         instance.reviewed_at = timezone.now()
-        instance.comments = request.data.get("comments", instance.comments)
-        instance.save(update_fields=["status", "reviewed_by", "reviewed_at", "comments", "updated_at"])
+        instance.comments = request.data.get(
+            "comments",
+            instance.comments,
+        )
+
+        instance.save(
+            update_fields=[
+                "status",
+                "reviewed_by",
+                "reviewed_at",
+                "comments",
+                "updated_at",
+            ]
+        )
 
         audit_action(
             request=request,
@@ -190,17 +253,37 @@ class SupplyRequestViewSet(BaseModelViewSet):
             message="Solicitud rechazada correctamente.",
         )
 
-    @action(detail=True, methods=["post"])
+    @action(
+        detail=True,
+        methods=["post"],
+    )
     def observe(self, request, uuid=None):
-        ensure_action_permission(CanApproveSupplyRequest, request, self)
+        ensure_action_permission(
+            CanApproveSupplyRequest,
+            request,
+            self,
+        )
+
         instance = self.get_object()
         old_data = serialize_instance(instance)
 
         instance.status = SupplyRequest.STATUS_OBSERVED
         instance.reviewed_by = request.user
         instance.reviewed_at = timezone.now()
-        instance.comments = request.data.get("comments", instance.comments)
-        instance.save(update_fields=["status", "reviewed_by", "reviewed_at", "comments", "updated_at"])
+        instance.comments = request.data.get(
+            "comments",
+            instance.comments,
+        )
+
+        instance.save(
+            update_fields=[
+                "status",
+                "reviewed_by",
+                "reviewed_at",
+                "comments",
+                "updated_at",
+            ]
+        )
 
         audit_action(
             request=request,
@@ -215,19 +298,33 @@ class SupplyRequestViewSet(BaseModelViewSet):
             message="Solicitud observada correctamente.",
         )
 
-
-    @action(detail=True, methods=["post"], url_path="convert-to-purchase-order")
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="convert-to-purchase-order",
+    )
     def convert_to_purchase_order(self, request, uuid=None):
         from django.core.exceptions import ValidationError
-        from apps.purchasing.services import convert_supply_request_to_purchase_order
+        from apps.purchasing.services import (
+            convert_supply_request_to_purchase_order,
+        )
 
-        ensure_action_permission(CanApprovePurchaseOrder, request, self)
+        ensure_action_permission(
+            CanApprovePurchaseOrder,
+            request,
+            self,
+        )
 
         instance = self.get_object()
         old_data = serialize_instance(instance)
 
-        serializer = ConvertSupplyRequestToPurchaseOrderSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        serializer = ConvertSupplyRequestToPurchaseOrderSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
 
         supplier = get_object_or_404(
             Supplier,
@@ -239,16 +336,28 @@ class SupplyRequestViewSet(BaseModelViewSet):
                 supply_request=instance,
                 supplier=supplier,
                 user=request.user,
-                expected_delivery_date=serializer.validated_data.get("expected_delivery_date"),
-                notes=serializer.validated_data.get("notes"),
-                tax_rate=serializer.validated_data.get("tax_rate"),
+                expected_delivery_date=serializer.validated_data.get(
+                    "expected_delivery_date"
+                ),
+                notes=serializer.validated_data.get(
+                    "notes"
+                ),
+                tax_rate=serializer.validated_data.get(
+                    "tax_rate"
+                ),
             )
+
         except ValidationError as exc:
             return api_response(
-                data={"detail": str(exc)},
+                data={
+                    "detail": str(exc)
+                },
                 status_code=400,
                 status_text="error",
-                message="No se pudo convertir la solicitud en orden de compra.",
+                message=(
+                    "No se pudo convertir la solicitud "
+                    "en orden de compra."
+                ),
             )
 
         audit_action(
@@ -257,39 +366,64 @@ class SupplyRequestViewSet(BaseModelViewSet):
             instance=result["supply_request"],
             old_data=old_data,
             new_data={
-                "supply_request_uuid": str(result["supply_request"].uuid),
-                "purchase_order_uuid": str(result["purchase_order"].uuid),
-                "purchase_order_number": result["purchase_order"].order_number,
-                "items_count": len(result["purchase_order_items"]),
+                "supply_request_uuid": str(
+                    result["supply_request"].uuid
+                ),
+                "purchase_order_uuid": str(
+                    result["purchase_order"].uuid
+                ),
+                "purchase_order_number":
+                    result["purchase_order"].order_number,
+                "items_count": len(
+                    result["purchase_order_items"]
+                ),
             },
-            notes="Solicitud convertida en orden de compra.",
+            notes=(
+                "Solicitud convertida en orden de compra."
+            ),
         )
 
         try:
             from apps.notifications.services import notify_roles
 
             notify_roles(
-                role_codes=["ADMIN", "GERENTE", "ABASTECIMIENTO"],
+                role_codes=[
+                    "ADMIN",
+                    "GERENTE",
+                    "ABASTECIMIENTO",
+                ],
                 branch=result["purchase_order"].branch,
-                title="Solicitud convertida en orden de compra",
-                message=f"La solicitud fue convertida en la OC {result['purchase_order'].order_number}.",
+                title=(
+                    "Solicitud convertida en orden de compra"
+                ),
+                message=(
+                    f"La solicitud fue convertida en la OC "
+                    f"{result['purchase_order'].order_number}."
+                ),
                 related_app="purchasing",
                 related_model="PurchaseOrder",
                 related_uuid=result["purchase_order"].uuid,
             )
+
         except Exception:
             pass
 
         return api_response(
             data={
-                "supply_request": self.get_serializer(result["supply_request"]).data,
-                "purchase_order": PurchaseOrderSerializer(result["purchase_order"]).data,
-                "items_count": len(result["purchase_order_items"]),
+                "supply_request": self.get_serializer(
+                    result["supply_request"]
+                ).data,
+                "purchase_order": PurchaseOrderSerializer(
+                    result["purchase_order"]
+                ).data,
+                "items_count": len(
+                    result["purchase_order_items"]
+                ),
             },
-            message="Solicitud convertida en orden de compra correctamente.",
+            message=(
+                "Solicitud convertida en orden de compra correctamente."
+            ),
         )
-
-
 
 class SupplyRequestItemViewSet(BaseModelViewSet):
     queryset = SupplyRequestItem.objects.select_related(
@@ -298,7 +432,7 @@ class SupplyRequestItemViewSet(BaseModelViewSet):
         "product",
     ).all()
     serializer_class = SupplyRequestItemSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessSupplyRequests]
 
     filterset_fields = [
         "supply_request",
@@ -337,7 +471,7 @@ class PurchaseOrderViewSet(BaseModelViewSet):
         "approved_by",
     ).prefetch_related("items").all()
     serializer_class = PurchaseOrderSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessPurchaseOrders]
 
     filterset_fields = [
         "supplier",
@@ -488,7 +622,7 @@ class PurchaseOrderItemViewSet(BaseModelViewSet):
         "product",
     ).all()
     serializer_class = PurchaseOrderItemSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessPurchaseOrders]
 
     filterset_fields = [
         "purchase_order",
@@ -523,7 +657,7 @@ class PurchaseReceiptViewSet(BaseModelViewSet):
         "received_by",
     ).prefetch_related("items").all()
     serializer_class = PurchaseReceiptSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessPurchaseReceipts]
 
     filterset_fields = [
         "purchase_order",
@@ -552,7 +686,7 @@ class PurchaseReceiptViewSet(BaseModelViewSet):
 
     @action(detail=True, methods=["post"])
     def process(self, request, uuid=None):
-        ensure_action_permission(CanReceivePurchase, request, self)
+        ensure_action_permission(CanProcessPurchaseReceipt, request, self)
         from django.core.exceptions import ValidationError
         from apps.purchasing.services import process_purchase_receipt
 
@@ -600,7 +734,7 @@ class PurchaseReceiptItemViewSet(BaseModelViewSet):
         "product",
     ).all()
     serializer_class = PurchaseReceiptItemSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessPurchaseReceipts]
 
     filterset_fields = [
         "purchase_receipt",
@@ -637,7 +771,7 @@ class SupplierClaimViewSet(BaseModelViewSet):
         "created_by",
     ).all()
     serializer_class = SupplierClaimSerializer
-    permission_classes = [CanManagePurchasing]
+    permission_classes = [CanAccessSupplierClaims]
 
     filterset_fields = [
         "purchase_receipt",
@@ -664,4 +798,6 @@ class SupplierClaimViewSet(BaseModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return apply_branch_scope(qs, self.request.user, branch_field="purchase_receipt__branch")
+        # Permitir ver reclamos globales (sin receipt o sin branch) incluso con scope
+        return apply_branch_scope(qs, self.request.user, branch_field="purchase_receipt__branch") | \
+               SupplierClaim.objects.filter(purchase_receipt__isnull=True)

@@ -1,5 +1,5 @@
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import IsAdminOrGerente
+from apps.common.permissions import CanManageOrganizations
 from apps.common.scopes import (
     user_is_global,
     get_user_scope_ids,
@@ -20,7 +20,7 @@ from .serializers import (
 class OrganizationViewSet(BaseModelViewSet):
     queryset = Organization.objects.all().order_by("name")
     serializer_class = OrganizationSerializer
-    permission_classes = [IsAdminOrGerente]
+    permission_classes = [CanManageOrganizations]
 
     filterset_fields = ["is_active"]
     search_fields = ["name", "rut"]
@@ -33,11 +33,25 @@ class OrganizationViewSet(BaseModelViewSet):
             return qs
         return apply_organization_scope(qs, self.request.user, organization_field="self")
 
+    def perform_create(self, serializer):
+        org = serializer.save()
+        user = self.request.user
+        if not user_is_global(user):
+            from apps.accounts.models import UserRoleAssignment
+            active_assignments = user.role_assignments.filter(is_active=True)
+            for assignment in active_assignments:
+                UserRoleAssignment.objects.get_or_create(
+                    user=user,
+                    role=assignment.role,
+                    organization=org,
+                    defaults={"is_active": True}
+                )
+
 
 class LegalEntityViewSet(BaseModelViewSet):
     queryset = LegalEntity.objects.select_related("organization").all().order_by("name")
     serializer_class = LegalEntitySerializer
-    permission_classes = [IsAdminOrGerente]
+    permission_classes = [CanManageOrganizations]
 
     filterset_fields = ["organization", "is_active"]
     search_fields = ["name", "rut", "business_activity"]
@@ -54,7 +68,7 @@ class LegalEntityViewSet(BaseModelViewSet):
 class BranchViewSet(BaseModelViewSet):
     queryset = Branch.objects.select_related("organization", "legal_entity").all().order_by("name")
     serializer_class = BranchSerializer
-    permission_classes = [IsAdminOrGerente]
+    permission_classes = [CanManageOrganizations]
 
     filterset_fields = ["organization", "legal_entity", "city", "is_main_branch", "is_active"]
     search_fields = ["name", "code", "city", "address", "email"]
@@ -69,7 +83,7 @@ class BranchViewSet(BaseModelViewSet):
 class CostCenterViewSet(BaseModelViewSet):
     queryset = CostCenter.objects.select_related("legal_entity", "branch").all().order_by("code")
     serializer_class = CostCenterSerializer
-    permission_classes = [IsAdminOrGerente]
+    permission_classes = [CanManageOrganizations]
 
     filterset_fields = ["legal_entity", "branch", "is_active"]
     search_fields = ["code", "name", "description"]

@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.decorators import action
 
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import CanManageInventory
+from apps.common.permissions import CanManageInventory, CanManageWarehouses
 from apps.common.scopes import apply_branch_scope
 from apps.common.responses import api_response
 from apps.audit.services import audit_action
@@ -39,7 +39,7 @@ from .services import (
 class WarehouseViewSet(BaseModelViewSet):
     queryset = Warehouse.objects.select_related("branch").all().order_by("name")
     serializer_class = WarehouseSerializer
-    permission_classes = [CanManageInventory]
+    permission_classes = [CanManageWarehouses]
 
     filterset_fields = ["branch", "warehouse_type", "is_active"]
     search_fields = ["name", "branch__name"]
@@ -179,8 +179,20 @@ class InventoryMovementViewSet(BaseModelViewSet):
     ordering = ["-created_at"]
 
     def get_queryset(self):
+        from django.db.models import Q
+        from apps.organizations.models import Branch
+
         qs = super().get_queryset()
-        return apply_branch_scope(qs, self.request.user, branch_field="warehouse_origin__branch")
+        if self.request.user.is_superuser:
+            return qs
+
+        allowed_branches = apply_branch_scope(Branch.objects.all(), self.request.user, branch_field="self")
+        branch_ids = allowed_branches.values_list("id", flat=True)
+
+        return qs.filter(
+            Q(warehouse_origin__branch_id__in=branch_ids) |
+            Q(warehouse_destination__branch_id__in=branch_ids)
+        )
 
     def _get_warehouse(self, warehouse_uuid):
         return get_object_or_404(Warehouse, uuid=warehouse_uuid)

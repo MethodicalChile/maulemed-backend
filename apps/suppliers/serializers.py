@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.products.serializers import ProductSmallSerializer
+from apps.products.models import Product
 from .models import Supplier, SupplierProduct, SupplierProductPrice, SupplierProductPriceHistory
 
 from django.db import transaction
@@ -20,6 +21,14 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 
 class SupplierProductSerializer(serializers.ModelSerializer):
+    supplier = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Supplier.objects.all(),
+    )
+    product = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Product.objects.all(),
+    )
     supplier_detail = SupplierSmallSerializer(source="supplier", read_only=True)
     product_detail = ProductSmallSerializer(source="product", read_only=True)
 
@@ -174,6 +183,10 @@ class SupplierProductSmallSerializer(serializers.ModelSerializer):
 
 
 class SupplierProductPriceSerializer(serializers.ModelSerializer):
+    supplier_product = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=SupplierProduct.objects.all(),
+    )
     supplier_product_detail = SupplierProductSmallSerializer(source="supplier_product", read_only=True)
 
     class Meta:

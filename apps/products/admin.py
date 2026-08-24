@@ -11,8 +11,9 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 
 @admin.register(UnitOfMeasure)
 class UnitOfMeasureAdmin(admin.ModelAdmin):
-    list_display = ("code", "name")
+    list_display = ("code", "name", "is_active")
     search_fields = ("code", "name")
+    list_filter = ("is_active",)
 
 
 @admin.register(Product)
@@ -47,7 +48,6 @@ class BranchProductAdmin(admin.ModelAdmin):
         "min_stock",
         "critical_stock",
         "usual_monthly_quantity",
-        "is_active",
     )
     search_fields = ("branch__name", "product__name")
-    list_filter = ("branch", "cost_center", "is_active")
+    list_filter = ("branch", "cost_center")
