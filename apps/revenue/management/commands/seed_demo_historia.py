@@ -43,7 +43,12 @@ from apps.products.models import (
     ProductCategory,
     UnitOfMeasure,
 )
-from apps.purchasing.models import PurchaseOrder, PurchaseOrderItem
+from apps.purchasing.models import (
+    PurchaseOrder,
+    PurchaseOrderItem,
+    SupplyRequest,
+    SupplyRequestItem,
+)
 from apps.revenue.models import (
     CashCollection,
     Financier,
@@ -163,6 +168,7 @@ class Command(BaseCommand):
         cajas = self._sembrar_recaudacion(meses, sociedades)
         self._sembrar_presupuestos(meses, sociedades)
         compras = self._sembrar_compras(meses, sociedades)
+        solicitudes = self._sembrar_solicitudes(meses, sociedades)
         inventario = self._sembrar_inventario(sociedades)
         cuentas = self._reconstruir_cobranza(meses)
 
@@ -174,8 +180,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"Historia de {options['months']} meses: "
                 f"{prestaciones} prestaciones, {cajas} cierres de caja, "
-                f"{compras} órdenes con su factura, {inventario} posiciones de "
-                f"stock y {cuentas} cuentas por cobrar."
+                f"{compras} órdenes con su factura, {solicitudes} solicitudes, "
+                f"{inventario} posiciones de stock y {cuentas} cuentas por cobrar."
             )
         )
 
@@ -194,6 +200,12 @@ class Command(BaseCommand):
         CashCollection.all_objects.filter(source_document__isnull=True).exclude(
             collection_date=date(2026, 7, 24)
         ).delete()
+
+        solicitudes = SupplyRequest.all_objects.filter(comments=MARCA)
+        SupplyRequestItem.all_objects.filter(
+            supply_request__in=solicitudes
+        ).delete()
+        solicitudes.delete()
 
         ordenes = PurchaseOrder.all_objects.filter(notes=MARCA)
         n_ord = ordenes.count()
@@ -508,6 +520,81 @@ class Command(BaseCommand):
                     creadas += 1
 
         return creadas
+
+    # ── Solicitudes de insumos ─────────────────────────────────────────────
+
+    def _sembrar_solicitudes(self, meses, sociedades):
+        """
+        Solicitudes repartidas por las fases del ciclo.
+
+        Sin esto el gráfico de estado de compras muestra una sola barra: todo
+        cerrado. La operación real tiene siempre algo en revisión y algo por
+        enviar, y eso es lo que el tablero debe dejar ver.
+        """
+        productos = self._productos()
+
+        # Las proporciones de una operación en marcha: la mayoría ya convertida
+        # en compra, unas pocas esperando revisión, alguna rechazada.
+        REPARTO = [
+            (SupplyRequest.STATUS_CONVERTED_TO_PURCHASE, 0.55),
+            (SupplyRequest.STATUS_APPROVED, 0.15),
+            (SupplyRequest.STATUS_IN_REVIEW, 0.10),
+            (SupplyRequest.STATUS_SUBMITTED, 0.08),
+            (SupplyRequest.STATUS_OBSERVED, 0.05),
+            (SupplyRequest.STATUS_DRAFT, 0.04),
+            (SupplyRequest.STATUS_REJECTED, 0.03),
+        ]
+
+        creadas = 0
+
+        for primero in meses:
+            for le in sociedades:
+                sucursales = list(Branch.objects.filter(legal_entity=le, is_active=True))
+                centros = list(CostCenter.objects.filter(legal_entity=le))
+                if not sucursales or not centros:
+                    continue
+
+                for _ in range(self.rng.randint(1, 3)):
+                    estado = self._elegir_estado(REPARTO)
+
+                    solicitud = SupplyRequest.objects.create(
+                        branch=self.rng.choice(sucursales),
+                        legal_entity=le,
+                        cost_center=self.rng.choice(centros),
+                        period_year=primero.year,
+                        period_month=primero.month,
+                        status=estado,
+                        comments=MARCA,
+                    )
+
+                    for producto, precio, _linea in self.rng.sample(
+                        productos, self.rng.randint(1, 3)
+                    ):
+                        pedida = Decimal(self.rng.randint(5, 40))
+                        SupplyRequestItem.objects.create(
+                            supply_request=solicitud,
+                            product=producto,
+                            requested_quantity=pedida,
+                            # El consumo habitual y el stock del momento: los dos
+                            # datos con los que la Encargada valida la cantidad.
+                            usual_quantity=pedida * Decimal(
+                                str(round(self.rng.uniform(0.7, 1.3), 2))
+                            ),
+                            current_stock_snapshot=Decimal(self.rng.randint(0, 30)),
+                        )
+
+                    creadas += 1
+
+        return creadas
+
+    def _elegir_estado(self, reparto):
+        r = self.rng.random()
+        acumulado = 0
+        for estado, peso in reparto:
+            acumulado += peso
+            if r <= acumulado:
+                return estado
+        return reparto[-1][0]
 
     # ── Presupuestos ───────────────────────────────────────────────────────
 
