@@ -9,6 +9,7 @@ from .views import (
     PurchaseReceiptViewSet,
     PurchaseReceiptItemViewSet,
     SupplierClaimViewSet,
+    ApprovalRuleViewSet,
 )
 
 
@@ -20,6 +21,7 @@ router.register("purchase-order-items", PurchaseOrderItemViewSet, basename="purc
 router.register("purchase-receipts", PurchaseReceiptViewSet, basename="purchase-receipts")
 router.register("purchase-receipt-items", PurchaseReceiptItemViewSet, basename="purchase-receipt-items")
 router.register("supplier-claims", SupplierClaimViewSet, basename="supplier-claims")
+router.register("approval-rules", ApprovalRuleViewSet, basename="approval-rules")
 
 
 urlpatterns = [

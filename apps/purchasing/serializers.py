@@ -15,6 +15,7 @@ from apps.inventory.serializers import WarehouseSmallSerializer
 from apps.inventory.models import Warehouse
 
 from .models import (
+    ApprovalRule,
     SupplyRequest,
     SupplyRequestItem,
     PurchaseOrder,
@@ -223,3 +224,36 @@ class SupplierClaimSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierClaim
         exclude = ["id", "deleted_at"]
+
+
+class ApprovalRuleSerializer(serializers.ModelSerializer):
+    legal_entity_detail = LegalEntitySmallSerializer(
+        source="legal_entity", read_only=True
+    )
+    required_role_code = serializers.CharField(
+        source="required_role.code", read_only=True
+    )
+    required_role_name = serializers.CharField(
+        source="required_role.name", read_only=True
+    )
+
+    class Meta:
+        model = ApprovalRule
+        exclude = ["id", "deleted_at"]
+
+    def validate(self, attrs):
+        amount_from = attrs.get("amount_from")
+        if amount_from is None and self.instance:
+            amount_from = self.instance.amount_from
+
+        amount_to = attrs.get("amount_to")
+        if amount_to is None and self.instance and "amount_to" not in attrs:
+            amount_to = self.instance.amount_to
+
+        if amount_to is not None and amount_from is not None:
+            if amount_to <= amount_from:
+                raise serializers.ValidationError(
+                    "El monto superior debe ser mayor al inferior."
+                )
+
+        return attrs

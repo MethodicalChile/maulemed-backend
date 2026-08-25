@@ -297,3 +297,213 @@ class DashboardScopeTests(BaseDashboardTest):
         self.assertIsNone(data["purchasing"])
         self.assertIsNone(data["finance"])
         self.assertIn("unread_notifications", data)
+
+
+# ---------------------------------------------------------------------------
+# Tablero ejecutivo
+# ---------------------------------------------------------------------------
+
+class ExecutiveCalendarTests(TestCase):
+    """El calendario del período: es lo que decide cuántos puntos tiene la serie."""
+
+    def test_shift_month_cruza_el_año(self):
+        from datetime import date
+        from apps.dashboard.executive import shift_month
+
+        self.assertEqual(shift_month(date(2026, 1, 1), -1), date(2025, 12, 1))
+        self.assertEqual(shift_month(date(2026, 12, 1), 1), date(2027, 1, 1))
+        self.assertEqual(shift_month(date(2026, 6, 1), -18), date(2024, 12, 1))
+
+    def test_month_range_devuelve_todos_los_meses_pedidos(self):
+        from apps.dashboard.executive import month_range
+
+        meses = month_range(12)
+
+        self.assertEqual(len(meses), 12)
+        self.assertTrue(all(m.day == 1 for m in meses))
+        self.assertEqual(meses, sorted(meses))
+
+    def test_delta_pct_sin_base_devuelve_none(self):
+        """
+        Un "+100 %" porque el mes anterior fue cero es ruido, no información.
+        """
+        from apps.dashboard.executive import _delta_pct
+
+        self.assertIsNone(_delta_pct(1000, 0))
+        self.assertIsNone(_delta_pct(1000, None))
+        self.assertEqual(_delta_pct(150, 100), 50.0)
+        self.assertEqual(_delta_pct(50, 100), -50.0)
+
+
+class ExecutiveDashboardTests(TestCase):
+
+    def setUp(self):
+        self.client = APIClient()
+        self.org = Organization.objects.create(name="ExecOrg", is_active=True)
+        self.le = LegalEntity.objects.create(
+            organization=self.org, name="ExecLE", rut="76123999-1", is_active=True
+        )
+        self.branch = Branch.objects.create(
+            organization=self.org, legal_entity=self.le, name="ExecBranch", code="EB01"
+        )
+
+    def _auth(self, username="execadmin", superuser=True, role=None):
+        user = create_user(username, "pass", is_superuser=superuser)
+        if role:
+            assign_role(user, role, branch=self.branch)
+        self.client.force_authenticate(user=user)
+        return user
+
+    def test_admin_recibe_todos_los_bloques(self):
+        self._auth()
+
+        resp = self.client.get("/api/dashboard/executive/")
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        d = resp.json()["data"]
+
+        for bloque in ("revenue", "budget", "purchasing", "inventory"):
+            self.assertIsNotNone(d[bloque], f"falta {bloque}")
+
+        self.assertTrue(d["access"]["finance"])
+
+    def test_la_serie_trae_un_punto_por_mes_aunque_no_haya_datos(self):
+        """
+        Una serie con huecos se dibuja mal y hace parecer que el negocio se
+        detuvo. Los meses sin movimiento van en cero, no ausentes.
+        """
+        self._auth("exec_serie")
+
+        resp = self.client.get("/api/dashboard/executive/?months=6")
+        d = resp.json()["data"]
+
+        self.assertEqual(len(d["period"]["labels"]), 6)
+        self.assertEqual(len(d["revenue"]["trend"]), 6)
+        self.assertTrue(all(p["revenue"] == 0 for p in d["revenue"]["trend"]))
+
+    def test_months_se_acota_a_un_rango_razonable(self):
+        self._auth("exec_rango")
+
+        self.assertEqual(
+            self.client.get("/api/dashboard/executive/?months=999").json()["data"][
+                "period"
+            ]["months"],
+            36,
+        )
+        self.assertEqual(
+            self.client.get("/api/dashboard/executive/?months=0").json()["data"][
+                "period"
+            ]["months"],
+            1,
+        )
+        self.assertEqual(
+            self.client.get("/api/dashboard/executive/?months=abc").json()["data"][
+                "period"
+            ]["months"],
+            12,
+        )
+
+    def test_sin_permiso_el_bloque_es_none_y_no_una_lista_vacia(self):
+        """
+        La interfaz necesita distinguir "no puedes ver esto" de "no hay nada":
+        decirle "sin datos" a quien no tiene acceso es mentirle.
+        """
+        self._auth("exec_secretaria", superuser=False, role="SECRETARIA")
+
+        resp = self.client.get("/api/dashboard/executive/")
+        d = resp.json()["data"]
+
+        self.assertFalse(d["access"]["finance"])
+        self.assertIsNone(d["revenue"])
+        self.assertIsNone(d["budget"])
+
+    def test_requiere_autenticacion(self):
+        self.client.force_authenticate(user=None)
+        resp = self.client.get("/api/dashboard/executive/")
+        self.assertIn(
+            resp.status_code,
+            (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+        )
+
+    def test_tendencia_y_kpi_reflejan_el_ingreso_cargado(self):
+        from datetime import date
+        from django.utils import timezone
+        from apps.revenue.models import Financier, RevenueEntry
+
+        self._auth("exec_datos")
+
+        financiador = Financier.objects.create(
+            code="F-TEST", name="Financiador", financier_type=Financier.TYPE_FONASA
+        )
+        hoy = timezone.localdate()
+        mes = date(hoy.year, hoy.month, 1)
+
+        for monto in (Decimal("100000"), Decimal("50000")):
+            RevenueEntry.objects.create(
+                legal_entity=self.le,
+                financier=financiador,
+                service_date=mes,
+                gross_amount=monto,
+                net_amount=monto,
+            )
+
+        d = self.client.get("/api/dashboard/executive/?months=3").json()["data"]
+
+        self.assertEqual(d["revenue"]["trend"][-1]["revenue"], 150000.0)
+        self.assertEqual(d["kpis"]["revenue_accrued"]["value"], 150000.0)
+        self.assertEqual(len(d["kpis"]["revenue_accrued"]["sparkline"]), 3)
+
+        sociedades = d["revenue"]["by_legal_entity"]
+        self.assertEqual(len(sociedades), 1)
+        self.assertEqual(sociedades[0]["amount"], 150000.0)
+
+    def test_el_pipeline_agrupa_los_estados_en_cuatro_fases(self):
+        """
+        Ocho estados de solicitud y diez de orden no se pueden pintar: más de
+        siete clases con significado dejan de distinguirse.
+        """
+        self._auth("exec_pipeline")
+
+        d = self.client.get("/api/dashboard/executive/").json()["data"]
+        grupos = d["purchasing"]["purchase_orders"]
+
+        self.assertEqual(len(grupos), 5)
+        self.assertEqual(
+            [g["key"] for g in grupos],
+            ["draft", "in_review", "approved", "closed", "rejected"],
+        )
+
+    def test_stock_bajo_umbral_usa_branch_product(self):
+        """
+        El umbral que manda es el de BranchProduct, que es el que consulta la
+        alerta — no el min_level de InventoryStock, que nadie lee.
+        """
+        from apps.inventory.models import InventoryStock, Warehouse
+        from apps.products.models import BranchProduct, Product, ProductCategory, UnitOfMeasure
+
+        self._auth("exec_stock")
+
+        categoria = ProductCategory.objects.create(name="Cat")
+        unidad = UnitOfMeasure.objects.create(code="UN", name="Unidad")
+        producto = Product.objects.create(
+            category=categoria, unit=unidad, name="Insumo"
+        )
+        bodega = Warehouse.objects.create(branch=self.branch, name="Bodega")
+
+        BranchProduct.objects.create(
+            branch=self.branch,
+            product=producto,
+            min_stock=Decimal("50"),
+            critical_stock=Decimal("20"),
+            is_active=True,
+        )
+        InventoryStock.objects.create(
+            warehouse=bodega,
+            product=producto,
+            quantity=Decimal("10"),
+            min_level=Decimal("0"),  # el campo que nadie consulta
+        )
+
+        d = self.client.get("/api/dashboard/executive/").json()["data"]
+
+        self.assertEqual(d["inventory"]["low_stock_count"], 1)

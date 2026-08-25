@@ -86,6 +86,12 @@ class BranchProduct(BaseModel):
     critical_stock = models.DecimalField(max_digits=14, decimal_places=3, default=0)
     usual_monthly_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
 
+    # Faltaba, y tres sitios del código lo consultaban: notifications/services.py
+    # filtra por él para decidir si avisar stock bajo, y reventaba con FieldError.
+    # La alerta preventiva —el único mecanismo de anticipación que tiene la
+    # plataforma— no se disparaba nunca.
+    is_active = models.BooleanField(default=True)
+
     class Meta:
         db_table = "branch_products"
         constraints = [

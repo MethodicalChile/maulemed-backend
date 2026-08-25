@@ -7,3 +7,6 @@ __pycache__/
 
 # Logs
 logs/*.log
+
+# Base local de la demo (config/settings_local.py)
+db_local.sqlite3

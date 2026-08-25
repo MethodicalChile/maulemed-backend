@@ -1486,6 +1486,12 @@ def me(request):
             ),
         },
         {
+            "key": "revenue",
+            "label": "Ingresos",
+            "path": "/revenue",
+            "visible": user_has_perm("can_view_finance"),
+        },
+        {
             "key": "purchasing",
             "label": "Compras",
             "path": "/purchasing",

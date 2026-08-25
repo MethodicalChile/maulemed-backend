@@ -11,6 +11,103 @@ from apps.inventory.models import Warehouse
 from decimal import Decimal
 
 
+class ApprovalRule(BaseModel):
+    """
+    Umbral de aprobación por monto.
+
+    El informe documenta que la gerencia aprueba las compras de alto valor,
+    pero la regla no está escrita en ninguna parte: opera porque dos personas
+    la recuerdan. La Propuesta 1 del capítulo financiero pide precisamente
+    "umbrales de aprobación por monto y tipo de compra".
+
+    Los campos opcionales se leen como comodines: sin razón social, la regla
+    aplica a todas; sin tipo de compra, a todos. Así se puede partir con una
+    sola regla global y refinar después, en vez de tener que declarar la matriz
+    completa antes de que el control sirva de algo.
+    """
+
+    legal_entity = models.ForeignKey(
+        LegalEntity,
+        on_delete=models.CASCADE,
+        related_name="approval_rules",
+        blank=True,
+        null=True,
+        help_text="Vacío: aplica a todas las razones sociales.",
+    )
+
+    purchase_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Vacío: aplica a todos los tipos de compra.",
+    )
+
+    amount_from = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    amount_to = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Vacío: sin tope superior.",
+    )
+
+    required_role = models.ForeignKey(
+        "accounts.Role",
+        on_delete=models.PROTECT,
+        related_name="approval_rules",
+    )
+
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "approval_rules"
+        verbose_name = "Approval Rule"
+        verbose_name_plural = "Approval Rules"
+        ordering = ["amount_from"]
+        indexes = [
+            models.Index(fields=["legal_entity"], name="idx_approval_rule_entity"),
+            models.Index(fields=["is_active"], name="idx_approval_rule_active"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount_from__gte=0),
+                name="chk_approval_rule_from_non_negative",
+            ),
+        ]
+
+    def clean(self):
+        if self.amount_to is not None and self.amount_to <= self.amount_from:
+            raise ValidationError(
+                "El monto superior debe ser mayor al inferior."
+            )
+
+    def matches(self, *, amount, purchase_type=None, legal_entity=None):
+        """Si esta regla gobierna una compra concreta."""
+
+        if not self.is_active:
+            return False
+
+        if self.legal_entity_id and legal_entity is not None:
+            if self.legal_entity_id != legal_entity.id:
+                return False
+
+        if self.purchase_type and self.purchase_type != purchase_type:
+            return False
+
+        if amount < self.amount_from:
+            return False
+
+        if self.amount_to is not None and amount > self.amount_to:
+            return False
+
+        return True
+
+    def __str__(self):
+        tope = self.amount_to if self.amount_to is not None else "∞"
+        return f"{self.amount_from} - {tope} → {self.required_role}"
+
+
 class SupplyRequest(BaseModel):
     STATUS_DRAFT = "BORRADOR"
     STATUS_SUBMITTED = "ENVIADA"
@@ -279,6 +376,16 @@ class PurchaseOrder(BaseModel):
     subtotal_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    # Cuánto de esta orden sigue comprometido contra el presupuesto. Se llena al
+    # aprobar y se descuenta al facturar, cancelar o cerrar. Sin este dato, una
+    # orden facturada y luego cerrada liberaría dos veces el mismo monto, y la
+    # segunda liberación se comería el compromiso de otra orden.
+    budget_committed_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+    )
 
     notes = models.TextField(blank=True, null=True)
 

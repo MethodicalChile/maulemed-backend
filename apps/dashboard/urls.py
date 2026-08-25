@@ -5,6 +5,7 @@ from .views import (
     dashboard_inventory,
     dashboard_purchasing,
     dashboard_finance,
+    dashboard_executive,
 )
 
 
@@ -13,4 +14,5 @@ urlpatterns = [
     path("dashboard/inventory/", dashboard_inventory, name="dashboard-inventory"),
     path("dashboard/purchasing/", dashboard_purchasing, name="dashboard-purchasing"),
     path("dashboard/finance/", dashboard_finance, name="dashboard-finance"),
+    path("dashboard/executive/", dashboard_executive, name="dashboard-executive"),
 ]
