@@ -702,7 +702,7 @@ class PurchaseReceiptViewSet(BaseModelViewSet):
                 data={"detail": str(exc)},
                 status_code=400,
                 status_text="error",
-                message="No se pudo procesar la recepción.",
+                message=str(exc),
             )
 
         audit_action(

@@ -754,6 +754,7 @@ def role_permissions_matrix(request):
         "can_view_purchase_orders": ADMIN_GERENTE,
         "can_create_purchase_orders": ADMIN_GERENTE,
         "can_edit_purchase_orders": ADMIN_GERENTE,
+        "can_approve_purchase_orders": ADMIN_GERENTE,
         "can_delete_purchase_orders": ADMIN_GERENTE,
         "can_receive_purchase": ADMIN_GERENTE,
 
@@ -984,6 +985,10 @@ def role_permissions_matrix(request):
                 {
                     "action": "Editar orden",
                     "key": "can_edit_purchase_orders",
+                },
+                {
+                    "action": "Aprobar orden",
+                    "key": "can_approve_purchase_orders",
                 },
                 {
                     "action": "Eliminar orden",

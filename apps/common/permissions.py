@@ -692,9 +692,12 @@ class CanProcessPurchaseReceipt(BasePermission):
             "can_process_purchase_receipts",
         )
 
-class CanApprovePurchaseOrder(PermissionKeyRequired):
-    read_key  = "can_manage_purchase_orders"
-    write_key = "can_manage_purchase_orders"
+class CanApprovePurchaseOrder(BasePermission):
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        return user_has_permission_key(request.user, "can_approve_purchase_orders")
 
 
 class CanManageTransfers(BasePermission):
