@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, F
 from django.utils import timezone
 
 from rest_framework.decorators import api_view, permission_classes
@@ -250,7 +250,7 @@ def dashboard_summary(request):
 
         available_quantity = (
             stocks_qs.aggregate(
-                total=Sum("available_quantity")
+                total=Sum(F("quantity") - F("reserved_quantity"))
             )["total"]
             or 0
         )
@@ -559,7 +559,7 @@ def dashboard_inventory(request):
 
         "available_quantity":
             stocks_qs.aggregate(
-                total=Sum("available_quantity")
+                total=Sum(F("quantity") - F("reserved_quantity"))
             )["total"]
             or 0,
 
@@ -819,4 +819,136 @@ def dashboard_finance(request):
     return api_response(
         data=data,
         message="Dashboard financiero obtenido correctamente.",
+    )
+
+# ============================================================================
+# TABLERO EJECUTIVO
+# ============================================================================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_executive(request):
+    """
+    Todo lo que la pantalla de inicio necesita, en una sola llamada.
+
+    Se prefiere un endpoint agregado a seis pequeños porque el tablero los
+    consume siempre juntos: seis viajes para pintar una pantalla se notan, y
+    dejarían los bloques llegando en desorden.
+
+    Un bloque en None significa "sin permiso"; una lista vacía, "sin datos".
+    La interfaz necesita distinguirlos para no decirle "no hay información" a
+    quien en realidad no tiene acceso.
+
+    Parámetros:
+        months        cuántos meses cubre la serie (1 a 36, por defecto 12)
+        legal_entity  uuid de una razón social para acotar el tablero
+    """
+    from apps.dashboard import executive as ex
+
+    user = request.user
+
+    try:
+        months = int(request.query_params.get("months", 12))
+    except (TypeError, ValueError):
+        months = 12
+    months = max(1, min(36, months))
+
+    periodo = ex.month_range(months)
+
+    legal_entity = None
+    uuid_param = request.query_params.get("legal_entity")
+    if uuid_param:
+        from apps.organizations.models import LegalEntity
+
+        legal_entity = LegalEntity.objects.filter(uuid=uuid_param).first()
+
+    can_finance = _can_view_finance(user)
+    can_inventory = _can_view_inventory(user)
+    can_purchasing = _can_view_supply_requests(user) or _can_view_purchase_orders(user)
+
+    data = {
+        "period": {
+            "months": months,
+            "from": periodo[0].isoformat(),
+            "to": periodo[-1].isoformat(),
+            "labels": [ex.month_label(m) for m in periodo],
+        },
+        "access": {
+            "finance": can_finance,
+            "inventory": can_inventory,
+            "purchasing": can_purchasing,
+        },
+        "kpis": {},
+        "revenue": None,
+        "budget": None,
+        "purchasing": None,
+        "inventory": None,
+    }
+
+    # ── Ingreso, cobranza y presupuesto ────────────────────────────────────
+    if can_finance:
+        revenue = ex.revenue_blocks(user, periodo, legal_entity=legal_entity)
+        budget = ex.budget_block(user, legal_entity=legal_entity)
+
+        series = revenue.pop("_series")
+        deuda = revenue.pop("_receivable_total")
+
+        data["revenue"] = revenue
+        data["budget"] = budget
+
+        # El mes en curso contra el anterior. El último punto de la serie es el
+        # mes corriente, que va incompleto: se compara igual y la interfaz lo
+        # rotula como "en curso" para que nadie lea la caída como un desplome.
+        def actual_y_previo(clave):
+            serie = series[clave]
+            actual = serie[-1] if serie else ex.ZERO
+            previo = serie[-2] if len(serie) > 1 else None
+            return actual, previo
+
+        ingreso_actual, ingreso_previo = actual_y_previo("revenue")
+        caja_actual, caja_previo = actual_y_previo("collected")
+
+        data["kpis"]["revenue_accrued"] = ex._kpi(
+            float(ingreso_actual),
+            float(ingreso_previo) if ingreso_previo is not None else None,
+            series["revenue"],
+        )
+        data["kpis"]["revenue_collected"] = ex._kpi(
+            float(caja_actual),
+            float(caja_previo) if caja_previo is not None else None,
+            series["collected"],
+        )
+        data["kpis"]["receivable_pending"] = ex._kpi(deuda)
+        data["kpis"]["budget_execution"] = ex._kpi(
+            budget["execution_pct"] or 0,
+            unit="PCT",
+        )
+
+    # ── Compras ────────────────────────────────────────────────────────────
+    if can_purchasing:
+        compras = ex.purchasing_block(user, periodo, legal_entity=legal_entity)
+        data["purchasing"] = compras
+
+        data["kpis"]["pending_receipts"] = ex._kpi(
+            compras["pending_receipts"], unit="COUNT"
+        )
+        data["kpis"]["extraordinary_pct"] = ex._kpi(
+            compras["extraordinary_pct"] or 0, unit="PCT"
+        )
+
+    # ── Inventario ─────────────────────────────────────────────────────────
+    if can_inventory:
+        inventario = ex.inventory_block(user)
+        data["inventory"] = inventario
+
+        data["kpis"]["low_stock"] = ex._kpi(
+            inventario["low_stock_count"], unit="COUNT"
+        )
+        data["kpis"]["expiring_lots"] = ex._kpi(
+            inventario["expiring_count"], unit="COUNT"
+        )
+
+    return api_response(
+        data=data,
+        message="Tablero ejecutivo obtenido correctamente.",
     )

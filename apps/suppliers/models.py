@@ -11,7 +11,16 @@ class Supplier(BaseModel):
     email = models.EmailField(max_length=180, blank=True, null=True)
     phone = models.CharField(max_length=50, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
+    # payment_terms es la etiqueta heredada, en texto libre ("30 días fecha
+    # factura"). Se conserva porque los proveedores ya cargados la tienen, pero
+    # el plazo que la plataforma calcula es payment_terms_days: un texto libre
+    # no permite derivar el vencimiento ni medir el plazo real de pago.
     payment_terms = models.CharField(max_length=100, blank=True, null=True)
+    payment_terms_days = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text="Días desde la emisión de la factura hasta su vencimiento.",
+    )
     delivery_days = models.IntegerField(blank=True, null=True)
 
     is_active = models.BooleanField(default=True)

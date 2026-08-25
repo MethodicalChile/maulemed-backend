@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "apps.purchasing.apps.PurchasingConfig",
     "apps.transfers.apps.TransfersConfig",
     "apps.finance.apps.FinanceConfig",
+    "apps.revenue.apps.RevenueConfig",
     "apps.documents.apps.DocumentsConfig",
     "apps.notifications.apps.NotificationsConfig",
     "apps.audit.apps.AuditConfig",
