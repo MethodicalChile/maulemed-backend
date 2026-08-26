@@ -95,6 +95,11 @@ def user_has_permission_key(user, permission_key):
         "can_create_finance":         ADMIN_GERENTE_ROLES,
         "can_edit_finance":           ADMIN_GERENTE_ROLES,
         "can_delete_finance":         ADMIN_GERENTE_ROLES,
+        # Ingresos
+        "can_view_revenue": ADMIN_GERENTE_ROLES,
+        "can_create_revenue": ADMIN_GERENTE_ROLES,
+        "can_edit_revenue": ADMIN_GERENTE_ROLES,
+        "can_delete_revenue": ADMIN_GERENTE_ROLES,
         # Evaluaciones
         "can_view_evaluations":       ADMIN_GERENTE_ROLES,
         "can_create_evaluations":     ADMIN_GERENTE_ROLES,
@@ -111,6 +116,11 @@ def user_has_permission_key(user, permission_key):
         "can_edit_roles":             ADMIN_GERENTE_ROLES,
         "can_delete_roles":           ADMIN_GERENTE_ROLES,
         "can_view_audit":             ADMIN_GERENTE_ROLES,
+        # Mantenedor
+        "can_view_maintenance":       ADMIN_GERENTE_ROLES,
+        "can_create_maintenance":     ADMIN_GERENTE_ROLES,
+        "can_edit_maintenance":       ADMIN_GERENTE_ROLES,
+        "can_delete_maintenance":     ADMIN_GERENTE_ROLES,
         # Aliases legacy para compatibilidad con ViewSets existentes
         # "can_manage_organizations":   ADMIN_GERENTE_ROLES,
         # "can_manage_catalogs":        ADMIN_GERENTE_ROLES,
@@ -808,7 +818,47 @@ class CanManageFinance(BasePermission):
             permission_key,
         )
 
+class CanManageRevenue(BasePermission):
+    """
+    Permisos granulares para el módulo de Ingresos.
 
+    GET / HEAD / OPTIONS
+        -> can_view_revenue
+
+    POST
+        -> can_create_revenue
+
+    PUT / PATCH
+        -> can_edit_revenue
+
+    DELETE
+        -> can_delete_revenue
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_revenue"
+
+        elif request.method == "POST":
+            permission_key = "can_create_revenue"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_revenue"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_revenue"
+
+        else:
+            return False
+
+        return user_has_permission_key(
+            request.user,
+            permission_key,
+        )
+    
 class CanManageDocuments(BasePermission):
     """
     Permiso para acceder y utilizar
@@ -836,7 +886,29 @@ class CanViewAudit(PermissionKeyRequired):
     read_key  = "can_view_audit"
     write_key = "can_view_audit"
 
+class CanManageMaintenance(BasePermission):
 
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            permission_key = "can_view_maintenance"
+
+        elif request.method == "POST":
+            permission_key = "can_create_maintenance"
+
+        elif request.method in ("PUT", "PATCH"):
+            permission_key = "can_edit_maintenance"
+
+        elif request.method == "DELETE":
+            permission_key = "can_delete_maintenance"
+
+        else:
+            return False
+
+        return user_has_permission_key(request.user, permission_key)
+    
 class CanManageOrganizations(BasePermission):
 
     def has_permission(self, request, view):

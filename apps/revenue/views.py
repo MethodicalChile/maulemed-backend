@@ -2,7 +2,7 @@ from django.db.models import Count, Sum
 from rest_framework.decorators import action
 
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import CanManageFinance
+from apps.common.permissions import CanManageRevenue
 from apps.common.responses import api_response
 from apps.common.scopes import apply_legal_entity_scope
 
@@ -27,7 +27,7 @@ from .serializers import (
 class FinancierViewSet(BaseModelViewSet):
     queryset = Financier.objects.all()
     serializer_class = FinancierSerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = ["financier_type", "generates_receivable", "is_active"]
     search_fields = ["code", "name"]
@@ -38,7 +38,7 @@ class FinancierViewSet(BaseModelViewSet):
 class FinancierAliasViewSet(BaseModelViewSet):
     queryset = FinancierAlias.objects.select_related("financier").all()
     serializer_class = FinancierAliasSerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = ["financier", "is_active"]
     search_fields = ["raw_name", "financier__name"]
@@ -61,7 +61,7 @@ class RevenueEntryViewSet(BaseModelViewSet):
     ).all()
 
     serializer_class = RevenueEntrySerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = [
         "legal_entity",
@@ -132,7 +132,7 @@ class RevenueImportBatchViewSet(BaseModelViewSet):
     ).all()
 
     serializer_class = RevenueImportBatchSerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = ["status", "imported_by"]
     search_fields = ["file_name", "notes"]
@@ -209,7 +209,7 @@ class CashCollectionViewSet(BaseModelViewSet):
     ).all()
 
     serializer_class = CashCollectionSerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = ["legal_entity", "branch", "collection_date"]
     search_fields = ["legal_entity__name"]
@@ -285,7 +285,7 @@ class AccountReceivableViewSet(BaseModelViewSet):
     ).all()
 
     serializer_class = AccountReceivableSerializer
-    permission_classes = [CanManageFinance]
+    permission_classes = [CanManageRevenue]
 
     filterset_fields = [
         "legal_entity",

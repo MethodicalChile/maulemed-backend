@@ -289,20 +289,28 @@ def adjust_stock(
     warehouse,
     product,
     quantity,
-    reason,
+    reason=None,
+    lot_number=None,
+    expiration_date=None,
+    supplier=None,
     created_by_uuid=None,
 ):
     quantity = to_decimal(quantity)
 
     if quantity == 0:
-        raise ValidationError("El ajuste no puede ser cero.")
+        raise ValidationError(
+            "El ajuste no puede ser cero."
+        )
 
     if quantity > 0:
         return increase_stock(
             warehouse=warehouse,
             product=product,
             quantity=quantity,
-            reason=reason,
+            lot_number=lot_number,
+            expiration_date=expiration_date,
+            supplier=supplier,
+            reason=reason or "Ajuste manual de inventario",
             reference_type="AJUSTE_INVENTARIO",
             created_by_uuid=created_by_uuid,
             movement_type=InventoryMovement.TYPE_ADJUSTMENT_IN,
@@ -313,11 +321,10 @@ def adjust_stock(
         product=product,
         quantity=abs(quantity),
         movement_type=InventoryMovement.TYPE_ADJUSTMENT_OUT,
-        reason=reason,
+        reason=reason or "Ajuste manual de inventario",
         reference_type="AJUSTE_INVENTARIO",
         created_by_uuid=created_by_uuid,
     )
-
 
 @transaction.atomic
 def transfer_stock_between_warehouses(

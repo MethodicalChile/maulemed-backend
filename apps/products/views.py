@@ -1,5 +1,5 @@
 from apps.common.viewsets import BaseModelViewSet
-from apps.common.permissions import CanManageCatalogs, CanManageProducts
+from apps.common.permissions import CanManageMaintenance, CanManageProducts
 from apps.common.scopes import apply_branch_scope
 from django_filters import rest_framework as filters
 
@@ -15,7 +15,7 @@ from .serializers import (
 class ProductCategoryViewSet(BaseModelViewSet):
     queryset = ProductCategory.objects.all().order_by("name")
     serializer_class = ProductCategorySerializer
-    permission_classes = [CanManageCatalogs]
+    permission_classes = [CanManageMaintenance]
 
     filterset_fields = ["is_active"]
     search_fields = ["name", "description"]
@@ -26,15 +26,40 @@ class ProductCategoryViewSet(BaseModelViewSet):
 class UnitOfMeasureViewSet(BaseModelViewSet):
     queryset = UnitOfMeasure.objects.all().order_by("code")
     serializer_class = UnitOfMeasureSerializer
-    permission_classes = [CanManageCatalogs]
+    permission_classes = [CanManageMaintenance]
 
     search_fields = ["code", "name"]
     ordering_fields = ["code", "name", "created_at", "updated_at"]
     ordering = ["code"]
 
 
+# class ProductViewSet(BaseModelViewSet):
+#     queryset = Product.objects.select_related("category", "unit").all().order_by("name")
+#     serializer_class = ProductSerializer
+#     permission_classes = [CanManageProducts]
+
+#     filterset_fields = [
+#         "category",
+#         "unit",
+#         "requires_lot",
+#         "requires_expiration_date",
+#         "requires_sanitary_resolution",
+#         "is_medication",
+#         "is_controlled",
+#         "is_active",
+#     ]
+#     search_fields = ["name", "description", "sku", "barcode", "internal_code"]
+#     ordering_fields = ["name", "sku", "internal_code", "created_at", "updated_at"]
+#     ordering = ["name"]
+    
 class ProductViewSet(BaseModelViewSet):
-    queryset = Product.objects.select_related("category", "unit").all().order_by("name")
+    queryset = (
+        Product.objects
+        .select_related("category", "unit")
+        .all()
+        .order_by("name")
+    )
+
     serializer_class = ProductSerializer
     permission_classes = [CanManageProducts]
 
@@ -48,8 +73,23 @@ class ProductViewSet(BaseModelViewSet):
         "is_controlled",
         "is_active",
     ]
-    search_fields = ["name", "description", "sku", "barcode", "internal_code"]
-    ordering_fields = ["name", "sku", "internal_code", "created_at", "updated_at"]
+
+    search_fields = [
+        "name",
+        "description",
+        "sku",
+        "barcode",
+        "internal_code",
+    ]
+
+    ordering_fields = [
+        "name",
+        "sku",
+        "internal_code",
+        "created_at",
+        "updated_at",
+    ]
+
     ordering = ["name"]
 
 

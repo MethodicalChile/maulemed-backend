@@ -312,11 +312,24 @@ class InventoryMovementViewSet(BaseModelViewSet):
 
         try:
             result = adjust_stock(
-                warehouse=self._get_warehouse(data["warehouse_uuid"]),
-                product=self._get_product(data["product_uuid"]),
+                warehouse=self._get_warehouse(
+                    data["warehouse_uuid"]
+                ),
+                product=self._get_product(
+                    data["product_uuid"]
+                ),
                 quantity=data["quantity"],
-                reason=data["reason"],
-                created_by_uuid=request.user.profile.uuid if hasattr(request.user, "profile") else None,
+                reason=data.get("reason"),
+                lot_number=data.get("lot_number"),
+                expiration_date=data.get("expiration_date"),
+                supplier=self._get_supplier(
+                    data.get("supplier_uuid")
+                ),
+                created_by_uuid=(
+                    request.user.profile.uuid
+                    if hasattr(request.user, "profile")
+                    else None
+                ),
             )
         except ValidationError as exc:
             return self._handle_validation_error(exc)

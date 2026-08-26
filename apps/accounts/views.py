@@ -773,6 +773,12 @@ def role_permissions_matrix(request):
         "can_edit_finance": ADMIN_GERENTE,
         "can_delete_finance": ADMIN_GERENTE,
 
+        # Ingresos
+        "can_view_revenue": ADMIN_GERENTE,
+        "can_create_revenue": ADMIN_GERENTE,
+        "can_edit_revenue": ADMIN_GERENTE,
+        "can_delete_revenue": ADMIN_GERENTE,
+
         # Evaluaciones
         "can_view_evaluations": ADMIN_GERENTE,
         "can_create_evaluations": ADMIN_GERENTE,
@@ -867,6 +873,29 @@ def role_permissions_matrix(request):
             ],
         },
 
+        {
+            "module": "Mantenedor",
+            "key": "maintenance",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_maintenance",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_maintenance",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_maintenance",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_maintenance",
+                },
+            ],
+        },
+        
         {
             "module": "Proveedores",
             "key": "suppliers",
@@ -1097,6 +1126,29 @@ def role_permissions_matrix(request):
         },
 
         {
+            "module": "Ingresos",
+            "key": "revenue",
+            "permissions": [
+                {
+                    "action": "Ver",
+                    "key": "can_view_revenue",
+                },
+                {
+                    "action": "Crear",
+                    "key": "can_create_revenue",
+                },
+                {
+                    "action": "Editar",
+                    "key": "can_edit_revenue",
+                },
+                {
+                    "action": "Eliminar",
+                    "key": "can_delete_revenue",
+                },
+            ],
+        },
+
+        {
             "module": "Evaluaciones",
             "key": "evaluations",
             "permissions": [
@@ -1298,6 +1350,11 @@ def me(request):
         "can_create_products":        ADMIN_GERENTE,
         "can_edit_products":          ADMIN_GERENTE,
         "can_delete_products":        ADMIN_GERENTE,
+        # Mantenedor
+        "can_view_maintenance":       ADMIN_GERENTE,
+        "can_create_maintenance":     ADMIN_GERENTE,
+        "can_edit_maintenance":       ADMIN_GERENTE,
+        "can_delete_maintenance":     ADMIN_GERENTE,
         # Proveedores
         "can_view_suppliers":         ADMIN_GERENTE,
         "can_create_suppliers":       ADMIN_GERENTE,
@@ -1376,12 +1433,18 @@ def me(request):
         return False
 
     permissions = {
+        # Dashboard
         "can_view_dashboard":         True,
         # Productos
         "can_view_products":          user_has_perm("can_view_products"),
         "can_create_products":        user_has_perm("can_create_products"),
         "can_edit_products":          user_has_perm("can_edit_products"),
         "can_delete_products":        user_has_perm("can_delete_products"),
+        # Mantenedor
+        "can_view_maintenance":       user_has_perm("can_view_maintenance"),
+        "can_create_maintenance":     user_has_perm("can_create_maintenance"),
+        "can_edit_maintenance":       user_has_perm("can_edit_maintenance"),
+        "can_delete_maintenance":     user_has_perm("can_delete_maintenance"),
         # Proveedores
         "can_view_suppliers":         user_has_perm("can_view_suppliers"),
         "can_create_suppliers":       user_has_perm("can_create_suppliers"),
@@ -1428,6 +1491,11 @@ def me(request):
         "can_create_finance":         user_has_perm("can_create_finance"),
         "can_edit_finance":           user_has_perm("can_edit_finance"),
         "can_delete_finance":         user_has_perm("can_delete_finance"),
+        # Ingresos
+        "can_view_revenue": user_has_perm("can_view_revenue"),
+        "can_create_revenue": user_has_perm("can_create_revenue"),
+        "can_edit_revenue": user_has_perm("can_edit_revenue"),
+        "can_delete_revenue": user_has_perm("can_delete_revenue"),
         # Carga de documentos
         "can_access_document_preview": user_has_perm("can_access_document_preview"),
         # Evaluaciones
@@ -1489,7 +1557,7 @@ def me(request):
             "key": "revenue",
             "label": "Ingresos",
             "path": "/revenue",
-            "visible": user_has_perm("can_view_finance"),
+            "visible": user_has_perm("can_view_revenue"),
         },
         {
             "key": "purchasing",

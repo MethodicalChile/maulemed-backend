@@ -11,6 +11,7 @@ from .views import (
     supplier_options,
     warehouse_options,
     role_options,
+    inventory_lot_options,
 )
 
 
@@ -25,4 +26,9 @@ urlpatterns = [
     path("options/suppliers/", supplier_options, name="options-suppliers"),
     path("options/warehouses/", warehouse_options, name="options-warehouses"),
     path("options/roles/", role_options, name="options-roles"),
+    path(
+        "options/inventory-lots/",
+        inventory_lot_options,
+        name="options-inventory-lots",
+    ),
 ]
