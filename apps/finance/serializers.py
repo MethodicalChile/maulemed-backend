@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.accounts.serializers import UserSerializer
-from apps.organizations.models import Branch, CostCenter
+from apps.organizations.models import Branch, CostCenter, LegalEntity
 from apps.organizations.serializers import (
     BranchSmallSerializer,
     CostCenterSmallSerializer,
@@ -12,7 +12,9 @@ from apps.products.serializers import (
     ProductCategorySmallSerializer,
     ProductSmallSerializer,
 )
+from apps.purchasing.models import PurchaseOrder
 from apps.purchasing.serializers import PurchaseOrderSmallSerializer
+from apps.suppliers.models import Supplier
 from apps.suppliers.serializers import SupplierSmallSerializer
 
 from .models import (
@@ -89,6 +91,36 @@ class SupplierInvoiceSmallSerializer(serializers.ModelSerializer):
 
 
 class SupplierInvoiceSerializer(serializers.ModelSerializer):
+    supplier = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Supplier.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    branch = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Branch.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    cost_center = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=CostCenter.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    purchase_order = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=PurchaseOrder.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     supplier_detail = SupplierSmallSerializer(
         source="supplier",
         read_only=True,
@@ -176,6 +208,18 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
+    supplier_invoice = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=SupplierInvoice.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
+        required=False,
+        allow_null=True,
+    )
     supplier_invoice_detail = SupplierInvoiceSmallSerializer(
         source="supplier_invoice",
         read_only=True,
@@ -242,23 +286,39 @@ class BudgetSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    branch = serializers.PrimaryKeyRelatedField(
-        queryset=BRANCH_PK_QS,
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
         required=False,
         allow_null=True,
     )
-    cost_center = serializers.PrimaryKeyRelatedField(
-        queryset=COST_CENTER_PK_QS,
+    legal_entity = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=LegalEntity.objects.all(),
+        required=True,
+        allow_null=False,
+    )
+    branch = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=Branch.objects.all(),
         required=False,
         allow_null=True,
     )
-    category = serializers.PrimaryKeyRelatedField(
-        queryset=PRODUCT_CATEGORY_PK_QS,
+    cost_center = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=CostCenter.objects.all(),
         required=False,
         allow_null=True,
     )
-    budget_category = serializers.PrimaryKeyRelatedField(
-        queryset=BUDGET_CATEGORY_PK_QS,
+    category = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=ProductCategory.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    budget_category = serializers.SlugRelatedField(
+        slug_field="uuid",
+        queryset=BudgetCategory.objects.all(),
         required=False,
         allow_null=True,
     )

@@ -366,8 +366,13 @@ class SupplierInvoiceItemViewSet(BaseModelViewSet):
         return apply_legal_entity_scope(
             qs,
             self.request.user,
-            legal_entity_field="supplier_invoice__legal_entity",
+            legal_entity_field="legal_entity",
         )
+
+    def perform_create(self, serializer):
+        print(f"Creating Budget: {serializer.validated_data}")
+        super().perform_create(serializer)
+
 
 
 # from rest_framework.decorators import action

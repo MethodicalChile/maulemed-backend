@@ -22,7 +22,7 @@ class ChatView(APIView):
             db_context = get_chat_context(request.user)
             
             system_instruction = f"""
-            Eres un asistente virtual amable y profesional de MauleMed. Tu objetivo es ayudar a los usuarios con consultas sobre la plataforma, procesos internos y dudas generales de manera clara y concisa.
+            Eres un asistente virtual amable y profesional de MauleMed. Tu objetivo es ayudar a los usuarios con consultas sobre la plataforma, procesos operativos y financieros de manera clara y concisa.
             
             Contexto de datos disponible para el usuario actual:
             {db_context}
