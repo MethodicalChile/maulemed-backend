@@ -34,6 +34,7 @@ def user_has_permission_key(user, permission_key):
     from apps.accounts.models import RolePermission
 
     role_codes = get_user_role_codes(user)
+    print(f"DEBUG: User: {user.username}, Role Codes: {role_codes}")
     if not role_codes:
         return False
 
@@ -43,6 +44,7 @@ def user_has_permission_key(user, permission_key):
         role__code__in=role_codes
     ).select_related("role"):
         saved.setdefault(rp.role.code, set()).add(rp.permission_key)
+    print(f"DEBUG: Saved permissions: {saved}")
 
     ADMIN_GERENTE_ROLES = {"ADMIN", "GERENTE"}
 

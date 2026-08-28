@@ -4,6 +4,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from apps.common.scopes import apply_branch_scope, apply_organization_scope
 from apps.common.services.chat_dashboard_summary import get_dashboard_summary_data
+from apps.common.permissions import user_has_permission_key
 
 # Definición de modelos expuestos al chat y su lógica de alcance
 MODELS_TO_EXPOSE = {
@@ -28,7 +29,7 @@ MODELS_TO_EXPOSE = {
     },
     'User': {
         'model_path': 'auth.User',
-        'scope_func': lambda qs, user, **kwargs: qs if user.is_superuser else qs.none(),
+        'scope_func': lambda qs, user, **kwargs: qs if user_has_permission_key(user, 'can_view_users') else qs.none(),
         'field': None,
         'fields_to_serialize': ['username', 'first_name', 'last_name', 'email']
     },
